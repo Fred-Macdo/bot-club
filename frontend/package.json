@@ -2,7 +2,7 @@
   "name": "bot-club-frontend",
   "version": "0.1.0",
   "private": true,
-  "proxy": "http://backend:8000",
+  "proxy": "http://backend:8000", 
   "scripts": {
     "start": "react-scripts start --host 0.0.0.0",
     "build": "react-scripts build",

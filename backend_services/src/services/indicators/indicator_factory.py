@@ -11,14 +11,42 @@ class IndicatorFactory:
             params: Dictionary of parameters for each indicator
         """
         self.df = df.clone()
-        # Default parameters if none provided
-        self.params = params or {
-            'sma': {'period': 20},
-            'ema': {'period': 20},
+        # Parse and organize parameters to handle multiple indicators of same type
+        self.params = self._parse_indicator_params(params) if params else self._get_default_params()
+
+    def _parse_indicator_params(self, params):
+        """
+        Parse indicator parameters to handle multiple indicators of the same type
+        with different parameters (e.g., ema_5, ema_10, sma_20, sma_50)
+        
+        Args:
+            params: Dictionary of indicator parameters
+            
+        Returns:
+            Dictionary with properly keyed indicators
+        """
+        parsed_params = {}
+        
+        for indicator_name, indicator_params in params.items():
+            # Handle indicators that need period-based naming (EMA, SMA)
+            if indicator_name.lower() in ['ema', 'sma']:
+                period = indicator_params.get('period', 20)
+                key = f"{indicator_name.lower()}_{period}"
+                parsed_params[key] = indicator_params
+            else:
+                # For other indicators, use the name as is
+                parsed_params[indicator_name.lower()] = indicator_params
+        
+        return parsed_params
+
+    def _get_default_params(self):
+        """Get default parameters for indicators"""
+        return {
+            'sma_20': {'period': 20},
+            'ema_20': {'period': 20},
             'rsi': {'period': 14},
             'bollinger_bands': {'period': 20, 'std_dev': 2},
             'atr': {'period': 14},
-            #'keltner_channels': {'period': 20, 'atr_multiplier': 2},
             'adx': {'period': 14},
             'obv': {},  # No parameters needed
             'mfi': {'period': 14},
@@ -81,40 +109,6 @@ class IndicatorFactory:
             pl.col("close"),
             timeperiod=period
         ).over("symbol").alias(f'atr')
-    
-    '''
-    def calculate_keltner_channels(self, period, atr_multiplier):
-        """
-        Calculate Keltner Channels
-        
-        Args:
-            period: Period for Keltner Channels
-            atr_multiplier: ATR multiplier for Keltner Channels
-        """
-        # Keltner returns a struct with upper, middle, and lower channels
-        return [
-            plta.keltner(
-                pl.col("high"),
-                pl.col("low"),
-                pl.col("close"),
-                timeperiod=period,
-                multiplier=atr_multiplier
-            ).struct.field("upperband").over("symbol").alias(f'kc_upper'),
-            plta.keltner(
-                pl.col("high"),
-                pl.col("low"),
-                pl.col("close"),
-                timeperiod=period,
-                multiplier=atr_multiplier
-            ).struct.field("middleband").over("symbol").alias(f'kc_middle'),
-            plta.keltner(
-                pl.col("high"),
-                pl.col("low"),
-                pl.col("close"),
-                timeperiod=period,
-                multiplier=atr_multiplier
-            ).struct.field("lowerband").over("symbol").alias(f'kc_lower')
-        ]'''
     
     def calculate_adx(self, period):
         """
@@ -195,7 +189,6 @@ class IndicatorFactory:
             'rsi': lambda params: self.calculate_rsi(params['period']),
             'bollinger_bands': lambda params: self.calculate_bollinger_bands(params['period'], params['std_dev']),
             'atr': lambda params: self.calculate_atr(params['period']),
-            #'keltner_channels': lambda params: self.calculate_keltner_channels(params['period'], params['atr_multiplier']),
             'adx': lambda params: self.calculate_adx(params['period']),
             'obv': lambda params: self.calculate_obv(),
             'mfi': lambda params: self.calculate_mfi(params['period']),
@@ -207,9 +200,12 @@ class IndicatorFactory:
         expressions = []
         
         # Process each indicator
-        for indicator_name, indicator_params in self.params.items():
-            if indicator_name in indicator_methods:
-                result = indicator_methods[indicator_name](indicator_params)
+        for indicator_key, indicator_params in self.params.items():
+            # Extract the base indicator name (e.g., 'ema' from 'ema_5')
+            base_name = indicator_key.split('_')[0] if '_' in indicator_key else indicator_key
+            
+            if base_name in indicator_methods:
+                result = indicator_methods[base_name](indicator_params)
                 # Handle both single expressions and lists of expressions
                 if isinstance(result, list):
                     expressions.extend(result)

@@ -25,6 +25,7 @@ class PyObjectId(ObjectId):
         field_schema.update(type="string")
         return field_schema
 
+
 class Indicator(BaseModel):
     """Technical indicator configuration"""
     name: str = Field(..., description="Indicator name (SMA, EMA, RSI, etc.)")

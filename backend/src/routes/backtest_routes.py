@@ -7,7 +7,7 @@ import uuid
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-
+import logging
 from ..database.client import get_db
 from ..models.backtest import BacktestParams, BacktestResponse, BacktestSummary
 from ..models.strategy import Strategy
@@ -17,6 +17,7 @@ from ..utils.redis_client import redis_client
 from ..services.default_strategies import get_default_strategies_from_db
 
 router = APIRouter(tags=["backtest"])
+logger = logging.getLogger(__name__)
 
 # Pydantic models for request/response
 class BacktestRunRequest(BaseModel):
@@ -263,6 +264,7 @@ async def run_backtest(
     # Load strategy configuration
     if request.strategy_type == 'default':
         default_strategies = await get_default_strategies_from_db(db)
+        logger.info(f"Default strategies: {default_strategies}")
         strategy_config = next((s for s in default_strategies if str(s["_id"]) == request.strategy_id), None)
         if not strategy_config:
             raise HTTPException(status_code=404, detail="Default strategy not found")

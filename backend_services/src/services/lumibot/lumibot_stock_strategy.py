@@ -7,14 +7,10 @@ import os
 from lumibot.strategies import Strategy
 from lumibot.backtesting import YahooDataBacktesting
 from lumibot.brokers import Alpaca
-import pandas as pd
+import polars as pl
 
 from components.TrueBautist import TrueBautistStrategy
-from components.Indicators import TechnicalIndicators
-
-# Set consistent formatting options at the beginning of the script
-pd.set_option('display.precision', 2)
-#np.set_self.log_messageoptions(precision=2, suppress=True)  # Added suppress=True to avoid scientific notation
+from ..indicators.IndicatorFactory import 
 
 
 class YAMLStrategy(Strategy):

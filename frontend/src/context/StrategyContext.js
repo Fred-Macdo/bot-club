@@ -239,18 +239,6 @@ export const StrategyProvider = ({ children }) => {
     }
   }, [user, fetchUserStrategies, fetchDefaultStrategies]);
 
-  // Periodic refresh (optional - every 30 seconds)
-  useEffect(() => {
-    if (user) {
-      const interval = setInterval(() => {
-        console.log('Periodic strategy refresh...');
-        fetchUserStrategies();
-      }, 300000); // 5 minutes
-
-      return () => clearInterval(interval);
-    }
-  }, [user, fetchUserStrategies]);
-
   const value = {
     strategies,
     defaultStrategies,

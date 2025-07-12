@@ -156,7 +156,7 @@ async def get_default_strategies_from_db(db: AsyncIOMotorDatabase) -> List[Dict[
     
     async for strategy in default_strategies_collection.find({}):
         # Remove MongoDB-specific fields that shouldn't be exposed
-        strategy.pop("_id", None)
+        #strategy.pop("_id", None)
         strategy.pop("key", None)  # Hide internal key from frontend
         strategies.append(strategy)
     

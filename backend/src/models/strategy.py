@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from bson import ObjectId
 from ..utils.mongo_helpers import PyObjectId
 
@@ -8,12 +8,24 @@ class Indicator(BaseModel):
     """Technical indicator configuration"""
     name: str = Field(..., description="Indicator name (SMA, EMA, RSI, etc.)")
     params: Dict[str, Any] = Field(default_factory=dict, description="Indicator parameters")
+    
+    @field_validator('name')
+    @classmethod
+    def validate_name_lowercase(cls, v):
+        """Convert indicator name to lowercase"""
+        return v.lower() if isinstance(v, str) else v
 
 class Condition(BaseModel):
     """Trading condition for entry/exit"""
     indicator: str = Field(..., description="Indicator or price field to compare")
     comparison: str = Field(..., description="Comparison operator (above, below, crosses_above, etc.)")
     value: Any = Field(..., description="Value to compare against (number or indicator name)")
+    
+    @field_validator('indicator', 'comparison')
+    @classmethod
+    def validate_strings_lowercase(cls, v):
+        """Convert indicator and comparison to lowercase"""
+        return v.lower() if isinstance(v, str) else v
 
 class RiskManagement(BaseModel):
     """Risk management parameters"""
@@ -23,6 +35,12 @@ class RiskManagement(BaseModel):
     take_profit: float = Field(default=0.10, description="Take profit as decimal (10% = 0.10)")
     max_position_size: float = Field(default=10000.0, description="Maximum position size in dollars")
     atr_multiplier: float = Field(default=2.0, description="ATR multiplier for position sizing")
+    
+    @field_validator('position_sizing_method')
+    @classmethod
+    def validate_position_sizing_lowercase(cls, v):
+        """Convert position sizing method to lowercase"""
+        return v.lower() if isinstance(v, str) else v
 
 class StrategyConfig(BaseModel):
     """Strategy configuration"""
@@ -34,6 +52,20 @@ class StrategyConfig(BaseModel):
     exit_conditions: List[Condition] = Field(default_factory=list, description="Exit conditions")
     risk_management: RiskManagement = Field(default_factory=RiskManagement, description="Risk management settings")
     indicators: List[Indicator] = Field(default_factory=list, description="Required technical indicators")
+    
+    @field_validator('symbols')
+    @classmethod
+    def validate_symbols_lowercase(cls, v):
+        """Convert all symbols to lowercase"""
+        if isinstance(v, list):
+            return [symbol.lower() if isinstance(symbol, str) else symbol for symbol in v]
+        return v
+    
+    @field_validator('timeframe')
+    @classmethod
+    def validate_timeframe_lowercase(cls, v):
+        """Convert timeframe to lowercase"""
+        return v.lower() if isinstance(v, str) else v
 
 class BacktestResult(BaseModel):
     """Backtest results"""
@@ -70,6 +102,12 @@ class Strategy(BaseModel):
     performance_stats: Optional[Dict[str, Any]] = Field(None, description="Live performance statistics")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    @field_validator('name', 'description')
+    @classmethod
+    def validate_strings_lowercase(cls, v):
+        """Convert name and description to lowercase"""
+        return v.lower() if isinstance(v, str) else v
 
     class Config:
         validate_by_name = True

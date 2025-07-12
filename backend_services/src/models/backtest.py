@@ -3,8 +3,6 @@ from typing import List, Any, Dict
 from pydantic import BaseModel, Field
 from bson import ObjectId
 
-from .strategy import PyObjectId  # Assuming PyObjectId is in strategy.py
-
 class BacktestParams(BaseModel):
     """Parameters for running a backtest"""
     strategy_id: str
@@ -16,8 +14,8 @@ class BacktestParams(BaseModel):
 
 class BacktestResult(BaseModel):
     """Backtest results"""
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    strategy_id: PyObjectId = Field(..., description="Strategy ID")
+    id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    strategy_id: str = Field(..., description="Strategy ID")
     total_return: float = Field(..., description="Total return percentage")
     sharpe_ratio: float = Field(..., description="Sharpe ratio")
     max_drawdown: float = Field(..., description="Maximum drawdown percentage")
@@ -36,4 +34,3 @@ class BacktestResult(BaseModel):
     class Config:
         validate_by_name = True
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
