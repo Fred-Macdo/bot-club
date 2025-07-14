@@ -9,13 +9,17 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app # Mounts the host's backend directory to /app in the container
-    environment:
+    env_file:
+      - ./backend/.env  # This loads all environment variables including CONFIG_ENCRYPTION_KEY
+    environment: 
       - MONGO_URL=mongodb://mongo:27017/bot_club_db # Added a database name
       - REDIS_URL=redis://redis:6379/0
       - LOCAL_DB=true
       - MONGO_DB_NAME=bot_club_db
       - NODE_ENV=development
       - BACKEND_SERVICES_URL=http://backend_services:8001
+      - SERVICE_NAME=backend
+
     depends_on:
       - mongo
       - redis
@@ -31,8 +35,7 @@ services:
     volumes:
       - ./backend_services:/app 
     env_file:
-      - ./.env
-      # Mounts the host's backend_services directory to /app in the container
+      - ./backend_services/.env  # This loads all environment variables including CONFIG_ENCRYPTION_KEY
     environment:
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=bot_club_db
@@ -41,6 +44,9 @@ services:
       - NODE_ENV=development
       - SERVICE_PORT=8001
       - API_SERVICE_URL=http://backend:8000
+      - SERVICE_NAME=backend_services
+
+
     depends_on:
       - mongo
       - redis
@@ -103,3 +109,4 @@ services:
 volumes:
   mongo_data: {}
   redis_data: {}
+

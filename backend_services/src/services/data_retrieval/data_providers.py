@@ -1,11 +1,35 @@
 # backend/src/services/data_providers.py
 from abc import ABC, abstractmethod
-import pandas as pd
+import polars as pl
 from datetime import datetime
-from typing import Optional, Dict, Any
+import logging
+from typing import Optional, Dict, Any, Tuple, Union
 import yfinance as yf
 import aiohttp
 import asyncio
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Consolidated timeframe mappings
+TIMEFRAME_MAPPINGS = {
+    # Standard input timeframes (what users can specify)
+    '1m': {'yahoo': '1m', 'alpaca': '1Min', 'polygon': ('minute', 1)},
+    '2m': {'yahoo': '2m', 'alpaca': None, 'polygon': None},
+    '5m': {'yahoo': '5m', 'alpaca': '5Min', 'polygon': ('minute', 5)},
+    '15m': {'yahoo': '15m', 'alpaca': '15Min', 'polygon': ('minute', 15)},
+    '30m': {'yahoo': '30m', 'alpaca': '30Min', 'polygon': ('minute', 30)},
+    '60m': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
+    '1h': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
+    '1d': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
+    '1D': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
+    '5d': {'yahoo': '5d', 'alpaca': None, 'polygon': None},
+    '1wk': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
+    '1w': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
+    '1W': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
+    '1mo': {'yahoo': '1mo', 'alpaca': None, 'polygon': None},
+    '3mo': {'yahoo': '3mo', 'alpaca': None, 'polygon': None},
+}
 
 class BaseDataProvider(ABC):
     """Abstract base class for data providers"""
@@ -17,7 +41,7 @@ class BaseDataProvider(ABC):
         start_date: datetime,
         end_date: datetime,
         timeframe: str
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Get historical OHLCV data"""
         pass
     
@@ -25,27 +49,24 @@ class BaseDataProvider(ABC):
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """Get current quote for a symbol"""
         pass
+    
+    def get_provider_timeframe(self, timeframe: str) -> Union[str, Tuple[str, int], None]:
+        """Get the provider-specific timeframe mapping"""
+        provider_name = self.get_provider_name()
+        if timeframe in TIMEFRAME_MAPPINGS:
+            return TIMEFRAME_MAPPINGS[timeframe].get(provider_name)
+        return None
+    
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """Return the provider name for timeframe mapping"""
+        pass
 
 class YahooFinanceProvider(BaseDataProvider):
     """Yahoo Finance data provider"""
     
-    def __init__(self):
-        self.timeframe_map = {
-            '1m': '1m',
-            '2m': '2m',
-            '5m': '5m',
-            '15m': '15m',
-            '30m': '30m',
-            '60m': '60m',
-            '1h': '60m',
-            '1d': '1d',
-            '1D': '1d',
-            '5d': '5d',
-            '1wk': '1wk',
-            '1W': '1wk',
-            '1mo': '1mo',
-            '3mo': '3mo'
-        }
+    def get_provider_name(self) -> str:
+        return 'yahoo'
     
     async def get_historical_data(
         self,
@@ -53,14 +74,14 @@ class YahooFinanceProvider(BaseDataProvider):
         start_date: datetime,
         end_date: datetime,
         timeframe: str
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Get historical data from Yahoo Finance"""
         # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         
         def fetch_data():
             ticker = yf.Ticker(symbol)
-            interval = self.timeframe_map.get(timeframe, '1d')
+            interval = self.get_provider_timeframe(timeframe) or '1d'
             
             df = ticker.history(
                 start=start_date,
@@ -104,7 +125,7 @@ class YahooFinanceProvider(BaseDataProvider):
 class AlpacaProvider(BaseDataProvider):
     """Alpaca Markets data provider"""
     
-    def __init__(self, api_key: str, secret_key: str, base_url: str = 'https://data.alpaca.markets'):
+    def __init__(self, api_key: str, secret_key: str, base_url: str = 'https://data.alpaca.markets/v2'):
         self.api_key = api_key
         self.secret_key = secret_key
         self.base_url = base_url
@@ -112,18 +133,9 @@ class AlpacaProvider(BaseDataProvider):
             'APCA-API-KEY-ID': api_key,
             'APCA-API-SECRET-KEY': secret_key
         }
-        
-        self.timeframe_map = {
-            '1m': '1Min',
-            '5m': '5Min',
-            '15m': '15Min',
-            '30m': '30Min',
-            '1h': '1Hour',
-            '1d': '1Day',
-            '1D': '1Day',
-            '1w': '1Week',
-            '1W': '1Week'
-        }
+    
+    def get_provider_name(self) -> str:
+        return 'alpaca'
     
     async def get_historical_data(
         self,
@@ -131,26 +143,29 @@ class AlpacaProvider(BaseDataProvider):
         start_date: datetime,
         end_date: datetime,
         timeframe: str
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Get historical data from Alpaca"""
         async with aiohttp.ClientSession() as session:
-            timeframe_str = self.timeframe_map.get(timeframe, '1Day')
+            timeframe_str = self.get_provider_timeframe(timeframe) or '1Day'
             
             url = f"{self.base_url}/v2/stocks/{symbol}/bars"
             params = {
                 'start': start_date.isoformat() + 'Z',
                 'end': end_date.isoformat() + 'Z',
                 'timeframe': timeframe_str,
-                'limit': 10000,
-                'page_token': None
+                'limit': 10000
             }
             
             all_bars = []
             
             while True:
+                # Only add page_token if it's not None
+                if 'page_token' in params and params['page_token'] is None:
+                    del params['page_token']
+                
                 async with session.get(url, headers=self.headers, params=params) as response:
                     data = await response.json()
-                    
+                    logger.info(f"Data Provider: Alpaca Response: {data}")
                     if 'bars' in data:
                         all_bars.extend(data['bars'])
                     
@@ -162,20 +177,24 @@ class AlpacaProvider(BaseDataProvider):
             
             # Convert to DataFrame
             if all_bars:
-                df = pd.DataFrame(all_bars)
-                df['t'] = pd.to_datetime(df['t'])
-                df.set_index('t', inplace=True)
+                df = pl.DataFrame(all_bars)
+                
+                # Fix datetime parsing - Alpaca returns ISO format with 'Z' timezone
+                df = df.with_columns(
+                    pl.col("t").str.to_datetime("%Y-%m-%dT%H:%M:%SZ").dt.convert_time_zone("America/New_York").alias("t")
+                )
                 
                 # Rename columns
-                df.rename(columns={
+                df = df.rename({
                     'o': 'open',
                     'h': 'high',
                     'l': 'low',
                     'c': 'close',
-                    'v': 'volume'
-                }, inplace=True)
+                    'v': 'volume',
+                    'vw': 'vwap'
+                })
                 
-                return df[['open', 'high', 'low', 'close', 'volume']]
+                return df[['t', 'open', 'high', 'low', 'close', 'volume', 'vwap']]
             else:
                 return pd.DataFrame()
     
@@ -195,7 +214,7 @@ class AlpacaProvider(BaseDataProvider):
                         'bid': quote.get('bp', 0),     # bid price
                         'ask': quote.get('ap', 0),     # ask price
                         'volume': quote.get('as', 0),  # ask size
-                        'timestamp': pd.to_datetime(quote.get('t'))
+                        'timestamp': pl.to_datetime(quote.get('t'))
                     }
                 else:
                     return {}
@@ -206,18 +225,9 @@ class PolygonProvider(BaseDataProvider):
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = 'https://api.polygon.io'
-        
-        self.timeframe_map = {
-            '1m': ('minute', 1),
-            '5m': ('minute', 5),
-            '15m': ('minute', 15),
-            '30m': ('minute', 30),
-            '1h': ('hour', 1),
-            '1d': ('day', 1),
-            '1D': ('day', 1),
-            '1w': ('week', 1),
-            '1W': ('week', 1)
-        }
+    
+    def get_provider_name(self) -> str:
+        return 'polygon'
     
     async def get_historical_data(
         self,
@@ -225,10 +235,14 @@ class PolygonProvider(BaseDataProvider):
         start_date: datetime,
         end_date: datetime,
         timeframe: str
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Get historical data from Polygon"""
         async with aiohttp.ClientSession() as session:
-            timeunit, multiplier = self.timeframe_map.get(timeframe, ('day', 1))
+            timeframe_mapping = self.get_provider_timeframe(timeframe)
+            if timeframe_mapping is None:
+                timeunit, multiplier = ('day', 1)  # default fallback
+            else:
+                timeunit, multiplier = timeframe_mapping
             
             url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/{multiplier}/{timeunit}/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
             params = {
@@ -240,26 +254,33 @@ class PolygonProvider(BaseDataProvider):
             
             async with session.get(url, params=params) as response:
                 data = await response.json()
-                
+                if response.status == 200:      
+                    logger.info(f"Data Provider: Polygon Response: {data}")
+                else:
+                    logger.error(f"Data Provider: Polygon Response: {data}")
+
                 if 'results' in data and data['results']:
-                    df = pd.DataFrame(data['results'])
+                    df = pl.DataFrame(data['results'])
                     
                     # Convert timestamp to datetime
-                    df['t'] = pd.to_datetime(df['t'], unit='ms')
-                    df.set_index('t', inplace=True)
+                    df = df.with_columns(
+                        pl.from_epoch('t', time_unit='ms').dt.convert_time_zone("America/New_York").alias("t")
+                    )
+
                     
                     # Rename columns
-                    df.rename(columns={
+                    df = df.rename({
                         'o': 'open',
                         'h': 'high',
                         'l': 'low',
                         'c': 'close',
-                        'v': 'volume'
-                    }, inplace=True)
+                        'v': 'volume',
+                        'vw': 'vwap'
+                    })
                     
-                    return df[['open', 'high', 'low', 'close', 'volume']]
+                    return df[['t', 'open', 'high', 'low', 'close', 'volume', 'vwap']]
                 else:
-                    return pd.DataFrame()
+                    return pl.DataFrame()
     
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """Get current quote from Polygon"""
@@ -269,7 +290,7 @@ class PolygonProvider(BaseDataProvider):
             
             async with session.get(url, params=params) as response:
                 data = await response.json()
-                
+                logger.info(f"Data Provider: Polygon Quote Response: {data}")
                 if 'results' in data:
                     result = data['results']
                     return {
@@ -278,7 +299,7 @@ class PolygonProvider(BaseDataProvider):
                         'bid': 0,  # Polygon doesn't provide bid/ask in this endpoint
                         'ask': 0,
                         'volume': result.get('s', 0),
-                        'timestamp': pd.to_datetime(result.get('t'), unit='ns')
+                        'timestamp': pl.to_datetime(result.get('t'), unit='ns')
                     }
                 else:
                     return {}
@@ -313,3 +334,25 @@ class DataProviderFactory:
         
         else:
             raise ValueError(f"Unknown data provider: {provider_name}")
+    
+    @staticmethod
+    def get_supported_timeframes(provider_name: str = None) -> Dict[str, list]:
+        """Get supported timeframes for a specific provider or all providers"""
+        if provider_name:
+            provider_name = provider_name.lower()
+            if provider_name not in ['yahoo', 'alpaca', 'polygon']:
+                raise ValueError(f"Unknown provider: {provider_name}")
+            
+            supported = []
+            for timeframe, mappings in TIMEFRAME_MAPPINGS.items():
+                if mappings.get(provider_name) is not None:
+                    supported.append(timeframe)
+            return {provider_name: supported}
+        else:
+            # Return all supported timeframes for each provider
+            result = {'yahoo': [], 'alpaca': [], 'polygon': []}
+            for timeframe, mappings in TIMEFRAME_MAPPINGS.items():
+                for provider in result.keys():
+                    if mappings.get(provider) is not None:
+                        result[provider].append(timeframe)
+            return result

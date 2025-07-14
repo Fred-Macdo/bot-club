@@ -91,9 +91,9 @@ class IndicatorFactory:
         """
         # Bollinger Bands returns a struct with upper, middle, and lower bands
         return [
-            pl.col("close").ta.bbands(period, std_dev).struct.field("upperband").over("symbol").alias(f'bb_upper'),
-            pl.col("close").ta.bbands(period, std_dev).struct.field("middleband").over("symbol").alias(f'bb_middle'),
-            pl.col("close").ta.bbands(period, std_dev).struct.field("lowerband").over("symbol").alias(f'bb_lower')
+            pl.col("close").ta.bbands(period, std_dev).struct.field("upperband").over("symbol").alias(f'upperband'),
+            pl.col("close").ta.bbands(period, std_dev).struct.field("middleband").over("symbol").alias(f'middleband'),
+            pl.col("close").ta.bbands(period, std_dev).struct.field("lowerband").over("symbol").alias(f'lowerband')
         ]
     
     def calculate_atr(self, period):
@@ -187,7 +187,7 @@ class IndicatorFactory:
             'sma': lambda params: self.calculate_sma(params['period']),
             'ema': lambda params: self.calculate_ema(params['period']),
             'rsi': lambda params: self.calculate_rsi(params['period']),
-            'bollinger_bands': lambda params: self.calculate_bollinger_bands(params['period'], params['std_dev']),
+            'bbands': lambda params: self.calculate_bollinger_bands(params['period'], params['std_dev']),
             'atr': lambda params: self.calculate_atr(params['period']),
             'adx': lambda params: self.calculate_adx(params['period']),
             'obv': lambda params: self.calculate_obv(),

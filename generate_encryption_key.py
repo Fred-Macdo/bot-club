@@ -13,7 +13,7 @@ def generate_key():
     print(f"CONFIG_ENCRYPTION_KEY={key.decode()}")
     print("="*60)
     print("Add this line to your .env file:")
-    print(f"echo 'CONFIG_ENCRYPTION_KEY={key.decode()}' >> .env")
+    print(f"echo 'CONFIG_ENCRYPTION_KEY={key.decode()}' >> secrets/config_encryption_key.txt")
     print("="*60)
     print("⚠️  IMPORTANT: Keep this key secure and backed up!")
     print("⚠️  If you lose this key, all encrypted data will be unrecoverable!")

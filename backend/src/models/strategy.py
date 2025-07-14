@@ -55,17 +55,17 @@ class StrategyConfig(BaseModel):
     
     @field_validator('symbols')
     @classmethod
-    def validate_symbols_lowercase(cls, v):
-        """Convert all symbols to lowercase"""
+    def validate_symbols_uppercase(cls, v):
+        """Convert all symbols to uppercase"""
         if isinstance(v, list):
-            return [symbol.lower() if isinstance(symbol, str) else symbol for symbol in v]
+            return [symbol.upper() if isinstance(symbol, str) else symbol for symbol in v]
         return v
     
     @field_validator('timeframe')
     @classmethod
-    def validate_timeframe_lowercase(cls, v):
-        """Convert timeframe to lowercase"""
-        return v.lower() if isinstance(v, str) else v
+    def validate_timeframe_uppercase(cls, v):
+        """Convert timeframe to uppercase"""
+        return v.upper() if isinstance(v, str) else v
 
 class BacktestResult(BaseModel):
     """Backtest results"""
@@ -105,9 +105,9 @@ class Strategy(BaseModel):
     
     @field_validator('name', 'description')
     @classmethod
-    def validate_strings_lowercase(cls, v):
-        """Convert name and description to lowercase"""
-        return v.lower() if isinstance(v, str) else v
+    def validate_strings_uppercase(cls, v):
+        """Convert name and description to uppercase"""
+        return v.upper() if isinstance(v, str) else v
 
     class Config:
         validate_by_name = True

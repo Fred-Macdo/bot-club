@@ -11,7 +11,8 @@ import logging
 
 from models.strategy import Strategy
 from models.backtest import BacktestParams, BacktestResult
-from .backtest_engine import BacktestEngine, TradingMode
+from .backtest_engine import BacktestEngine
+from .enums import TradingMode
 from config import MONGO_DB, SERVICE_PORT, API_SERVICE_URL
 
 logger = logging.getLogger(__name__)

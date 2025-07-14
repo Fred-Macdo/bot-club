@@ -1,6 +1,6 @@
 # Bot Club - Algorithmic Trading Platform
 
-A full-stack algorithmic trading platform built with the FARM stack (FastAPI, React, MongoDB, Docker) that enables users to create, backtest, and manage trading strategies with real-time market data integration.
+A full-stack algorithmic trading platform built with the FARM stack (FastAPI, React, MongoDB, Docker) that enables users to create, backtest, and manage trading strategies with real-time market data integration. The platform features a microservices architecture with separate backend services for enhanced backtesting and trading operations.
 
 ## 🚀 Features
 
@@ -18,16 +18,22 @@ A full-stack algorithmic trading platform built with the FARM stack (FastAPI, Re
 - Strategy sharing and collaboration (planned)
 
 ### Market Data Integration
-- Real-time market data feeds
+- Real-time market data feeds via Alpaca API, Polygon API or Yahoo Finance API.
 - Historical price data analysis
 - Multiple asset class support (stocks, crypto, forex)
-- Technical indicator calculations
+- Technical indicator calculations using Polars TA
 
 ### Portfolio Management
 - Real-time portfolio tracking
 - Performance metrics and analytics
 - Trade history and reporting
 - Risk management tools
+
+### Enhanced Backtesting
+- Multi-timeframe backtesting capabilities
+- Advanced technical indicators
+- Real-time backtest monitoring
+- Comprehensive performance metrics
 
 ## 🏗️ Project Structure
 
