@@ -76,6 +76,11 @@ const StrategyBuilderInterface = () => {
       max_position_size: 10000.0,
       atr_multiplier: 2.0
     },
+    // Add DCA configuration
+    dollar_cost_averaging: {
+      enabled: false,
+      max_positions: 3
+    },
     indicators: [
       {
         name: "SMA",
@@ -120,7 +125,12 @@ const StrategyBuilderInterface = () => {
     { name: 'MACD', label: 'MACD', defaultParams: { fast: 12, slow: 26, signal: 9 } },
     { name: 'Bollinger_Bands', label: 'Bollinger Bands', defaultParams: { period: 20, std: 2 } },
     { name: 'ATR', label: 'Average True Range', defaultParams: { period: 14 } },
-    { name: 'Stochastic', label: 'Stochastic Oscillator', defaultParams: { k_period: 14, d_period: 3 } }
+    { name: 'Stochastic', label: 'Stochastic Oscillator', defaultParams: { k_period: 14, d_period: 3 } },
+    { name: 'CCI', label: 'Commodity Channel Index', defaultParams: { period: 14 } },
+    { name: 'VWAP', label: 'Volume Weighted Average Price', defaultParams: { period: 20 } },
+    { name: 'MFI', label: 'Money Flow Index', defaultParams: { period: 14 } },
+    { name: 'ADX', label: 'Average Directional Index', defaultParams: { period: 14 } },
+    { name: 'OBV', label: 'On Balance Volume', defaultParams: { period: 14 } }
   ];  const comparisons = ['crosses_above', 'crosses_below', 'greater_than', 'less_than', 'equals', 'between'];
   const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
     // Popular symbols for autocomplete suggestions
@@ -130,10 +140,55 @@ const StrategyBuilderInterface = () => {
   
   // Get available indicator values based on current indicators
   const getAvailableIndicatorValues = () => {
-    return strategyConfig.indicators.map(indicator => {
+    const indicatorValues = [];
+    
+    strategyConfig.indicators.forEach(indicator => {
       const period = indicator.params.period || Object.values(indicator.params)[0];
-      return `${indicator.name}_${period}`;
+      const baseName = indicator.name.toLowerCase();
+      
+      // Handle complex indicators with multiple outputs
+      switch (baseName) {
+        case 'macd':
+          indicatorValues.push(
+            `macd_line`,
+            `macd_signal`,
+            `macd_hist`
+          );
+          break;
+          
+        case 'bollinger_bands':
+          indicatorValues.push(
+            `upperband`,
+            `middleband`,
+            `lowerband`
+          );
+          break;
+          
+        case 'stochastic':
+          const kPeriod = indicator.params.k_period || 14;
+          const dPeriod = indicator.params.d_period || 3;
+          indicatorValues.push(
+            `stoch_k_${kPeriod}`,
+            `stoch_d_${dPeriod}`
+          );
+          break;
+          
+        case 'adx':
+          indicatorValues.push(
+            `adx_${period}`,
+            `di_plus_${period}`,
+            `di_minus_${period}`
+          );
+          break;
+          
+        default:
+          // Simple indicators with single output
+          indicatorValues.push(`${baseName}_${period}`);
+          break;
+      }
     });
+    
+    return indicatorValues;
   };
   
   // Get available value options for conditions
@@ -249,6 +304,10 @@ ${strategyConfig.exit_conditions.map(formatCondition).join('\n')}
     take_profit: ${strategyConfig.risk_management.take_profit}
     max_position_size: ${strategyConfig.risk_management.max_position_size}
     atr_multiplier: ${strategyConfig.risk_management.atr_multiplier}
+
+  dollar_cost_averaging:
+    enabled: ${strategyConfig.dollar_cost_averaging.enabled}
+    max_positions: ${strategyConfig.dollar_cost_averaging.max_positions}
 
   indicators:
 ${strategyConfig.indicators.map(indicator => 
@@ -878,16 +937,24 @@ ${strategyConfig.indicators.map(indicator =>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <SettingsIcon color="warning" />
-            <Typography variant="h6">Risk Management</Typography>
+            <Typography variant="h6">Risk Management & Position Sizing</Typography>
             <Chip label="Configured" color="success" size="small" />
+            {strategyConfig.dollar_cost_averaging.enabled && (
+              <Chip label="DCA Enabled" color="info" size="small" />
+            )}
           </Box>
         </AccordionSummary>
         <AccordionDetails>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Configure position sizing and risk parameters to protect your capital
+            Configure position sizing, risk parameters, and dollar cost averaging to protect your capital
           </Typography>
           
-          <Grid container spacing={3}>
+          {/* Basic Risk Management Section */}
+          <Typography variant="h6" sx={{ mb: 2, color: 'primary.main' }}>
+            Basic Risk Management
+          </Typography>
+          
+          <Grid container spacing={3} sx={{ mb: 4 }}>
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
                 <InputLabel>Position Sizing Method</InputLabel>
@@ -994,6 +1061,82 @@ ${strategyConfig.indicators.map(indicator =>
               />
             </Grid>
           </Grid>
+
+          {/* Dollar Cost Averaging Section */}
+          <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+              <Typography variant="h6" sx={{ color: 'info.main' }}>
+                Dollar Cost Averaging (DCA)
+              </Typography>
+              <Button
+                variant={strategyConfig.dollar_cost_averaging.enabled ? "contained" : "outlined"}
+                color={strategyConfig.dollar_cost_averaging.enabled ? "success" : "primary"}
+                size="small"
+                onClick={() => setStrategyConfig({
+                  ...strategyConfig,
+                  dollar_cost_averaging: {
+                    ...strategyConfig.dollar_cost_averaging,
+                    enabled: !strategyConfig.dollar_cost_averaging.enabled
+                  }
+                })}
+              >
+                {strategyConfig.dollar_cost_averaging.enabled ? "Enabled" : "Disabled"}
+              </Button>
+            </Box>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              {strategyConfig.dollar_cost_averaging.enabled 
+                ? "DCA allows multiple positions per symbol to scale into trades at different price levels"
+                : "Enable DCA to allow multiple positions per symbol for scaling into trades"
+              }
+            </Typography>
+
+            {strategyConfig.dollar_cost_averaging.enabled && (
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Maximum Positions per Symbol"
+                    type="number"
+                    value={strategyConfig.dollar_cost_averaging.max_positions}
+                    onChange={(e) => setStrategyConfig({
+                      ...strategyConfig,
+                      dollar_cost_averaging: {
+                        ...strategyConfig.dollar_cost_averaging,
+                        max_positions: parseInt(e.target.value)
+                      }
+                    })}
+                    inputProps={{ min: 1, max: 10, step: 1 }}
+                    helperText="Maximum number of simultaneous positions per symbol"
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Box sx={{ 
+                    p: 2, 
+                    bgcolor: 'info.light', 
+                    borderRadius: 1, 
+                    color: 'info.contrastText' 
+                  }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+                      DCA Strategy Info:
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block' }}>
+                      • When enabled, strategy can open multiple positions per symbol
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block' }}>
+                      • Each entry signal creates a new position (up to max limit)
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block' }}>
+                      • Positions are closed individually based on exit conditions
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block' }}>
+                      • Useful for scaling into positions during favorable conditions
+                    </Typography>
+                  </Box>
+                </Grid>
+              </Grid>
+            )}
+          </Box>
         </AccordionDetails>
       </Accordion>
 

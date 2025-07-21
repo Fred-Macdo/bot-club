@@ -45,7 +45,8 @@ class IndicatorFactory:
             'sma_20': {'period': 20},
             'ema_20': {'period': 20},
             'rsi': {'period': 14},
-            'bollinger_bands': {'period': 20, 'std_dev': 2},
+            'macd': {'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
+            'bollinger_bands': {'period': 20, 'std': 2},
             'atr': {'period': 14},
             'adx': {'period': 14},
             'obv': {},  # No parameters needed
@@ -80,6 +81,21 @@ class IndicatorFactory:
             period: Period for RSI
         """
         return pl.col("close").ta.rsi(period).over("symbol").alias(f'rsi')
+    
+    def calculate_macd(self, fast_period=12, slow_period=26, signal_period=9):
+        """
+        Calculate Moving Average Convergence Divergence (MACD)
+        
+        Args:
+            fast_period: Fast period for MACD
+            slow_period: Slow period for MACD
+            signal_period: Signal period for MACD
+        """
+        return [
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macd"),
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdsignal"),
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdhist")
+        ]
     
     def calculate_bollinger_bands(self, period, std_dev):
         """
@@ -187,7 +203,7 @@ class IndicatorFactory:
             'sma': lambda params: self.calculate_sma(params['period']),
             'ema': lambda params: self.calculate_ema(params['period']),
             'rsi': lambda params: self.calculate_rsi(params['period']),
-            'bbands': lambda params: self.calculate_bollinger_bands(params['period'], params['std_dev']),
+            'bbands': lambda params: self.calculate_bollinger_bands(params['period'], params['std']),
             'atr': lambda params: self.calculate_atr(params['period']),
             'adx': lambda params: self.calculate_adx(params['period']),
             'obv': lambda params: self.calculate_obv(),

@@ -1,1 +1,4 @@
 secrets/
+# Ignore all .env files everywhere
+**/.env
+*.env

@@ -165,7 +165,7 @@ class AlpacaProvider(BaseDataProvider):
                 
                 async with session.get(url, headers=self.headers, params=params) as response:
                     data = await response.json()
-                    logger.info(f"Data Provider: Alpaca Response: {data}")
+                    #logger.info(f"Data Provider: Alpaca Response: {data}")
                     if 'bars' in data:
                         all_bars.extend(data['bars'])
                     

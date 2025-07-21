@@ -15,6 +15,7 @@ class BacktestParams(BaseModel):
 class BacktestResult(BaseModel):
     """Backtest results"""
     id: str = Field(default_factory=lambda: str(ObjectId()), alias="_id")
+    user_id: str = Field(..., description="User ID")
     strategy_id: str = Field(..., description="Strategy ID")
     total_return: float = Field(..., description="Total return percentage")
     sharpe_ratio: float = Field(..., description="Sharpe ratio")

@@ -58,13 +58,39 @@ class Portfolio:
         self.positions = {}
         self.equity_history = []
     
-    @property
-    def total_value(self) -> float:
+    def get_total_value(self, current_prices: Dict[str, float] = None) -> float:
+        """Calculate total portfolio value using current market prices"""
         total = self.cash
         for symbol, position in self.positions.items():
-            position_value = position.shares * position.entry_price
+            if current_prices and symbol in current_prices:
+                position_value = position.shares * current_prices[symbol]
+            else:
+                # Fallback to entry price if current price not available
+                position_value = position.shares * position.entry_price
             total += position_value
         return total
+    
+    @property
+    def total_value(self) -> float:
+        """Backward compatibility - uses entry prices"""
+        return self.get_total_value()
+    
+    def update_equity_history(self, timestamp: datetime, current_prices: Dict[str, float] = None, action: str = None):
+        """Update equity history with current portfolio state"""
+        total_portfolio_value = self.get_total_value(current_prices)
+        positions_value = total_portfolio_value - self.cash
+        
+        equity_point = {
+            'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp,
+            'value': total_portfolio_value,
+            'cash': self.cash,
+            'positions_value': positions_value,
+            'action': action  # 'buy', 'sell', or None for regular updates
+        }
+        
+        self.equity_history.append(equity_point)
+        
+        logger.debug(f"Equity update: ${total_portfolio_value:.2f} (Cash: ${self.cash:.2f}, Positions: ${positions_value:.2f}) - {action or 'update'}")
     
     def add_position(self, position: Position):
         self.positions[position.symbol] = position
@@ -139,11 +165,4 @@ class Portfolio:
         return trade
     
     def get_equity_curve(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                'timestamp': datetime.now().isoformat(),
-                'value': self.total_value,
-                'cash': self.cash,
-                'positions_value': self.total_value - self.cash
-            }
-        ] 
+        return self.equity_history

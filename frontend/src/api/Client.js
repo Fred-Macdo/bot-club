@@ -302,7 +302,17 @@ export const backtestApi = {
   },
 
   async getUserBacktests() {
-    return apiClient.get('/api/backtest/user');
+    console.log('backtestApi.getUserBacktests() called');
+    const response = await apiClient.get('/api/backtest/user');
+    console.log('getUserBacktests response:', response);
+    return response;
+  },
+
+  async getUserBacktestsDetailed() {
+    console.log('backtestApi.getUserBacktestsDetailed() called');
+    const response = await apiClient.get('/api/backtest/user/detailed');
+    console.log('getUserBacktestsDetailed response:', response);
+    return response;
   },
 
   async getBacktestById(backtestId) {

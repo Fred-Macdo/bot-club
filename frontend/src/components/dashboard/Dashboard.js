@@ -26,6 +26,8 @@ import {
   Assessment as AssessmentIcon,
 } from '@mui/icons-material';
 import Plot from 'react-plotly.js';
+import { userConfigApi } from '../../api/Client';
+
 
 const EquityCurveDashboard = () => {
   const theme = useTheme();
@@ -141,7 +143,7 @@ const EquityCurveDashboard = () => {
         xaxis: {
           title: 'Date',
           gridcolor: theme.palette.divider,
-          linecolor: theme.palette.text.secondary,
+          linecolor: theme.palette.text.primary,
           tickfont: { color: theme.palette.text.secondary }
         },
         yaxis: {

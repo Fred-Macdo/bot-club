@@ -7,8 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from .trade_logger import TradeLogger
 from .portfolio_manager import Portfolio
 from ..data_retrieval.data_providers import DataProviderFactory
-from .enums import TradingMode  # Updated import
-
+from ..utils.enums import TradingMode  
 logger = logging.getLogger(__name__)
 
 class LiveTradingManager:

@@ -2,22 +2,39 @@ import logging
 from typing import Dict, Any, List, Union
 from datetime import datetime
 
+from ..trading.portfolio_manager import Position
+
 logger = logging.getLogger(__name__)
 
 class ConditionChecker:
     """Handles entry and exit condition checking"""
     
-    def check_entry_conditions(self, conditions: List[Dict], row: Dict[str, Any], symbol: str) -> bool:
+    def check_entry_conditions(self, conditions: List[Dict], row: Dict[str, Any]) -> bool:
         """Check if entry conditions are met"""
         if not conditions:
             return False
         
-        return all(
-            self._check_condition(row, condition)
-            for condition in conditions
-        )
+        logger.info(f"Condition Checker: check_entry_conditions() - Conditions: {conditions}")
+        logger.info(f"Condition Checker: check_entry_conditions() - Row: {row}")
+        logger.info(f"Condition Checker: check_entry_conditions() - Type of conditions: {type(conditions)}")
+        logger.info(f"Condition Checker: check_entry_conditions() - Type of row: {type(row)}")
+        
+        conditions_met = []
+        for condition in conditions:
+            condition_met = self._check_condition(
+                row=row,
+                condition_config=condition
+            )
+            conditions_met.append(condition_met)
+            
+            if len(conditions_met) == len(conditions):
+                return True, conditions_met, row
+            else:
+                return False, None, None
+        
     
-    def check_exit_conditions(self, conditions: List[Dict], row: Dict[str, Any], symbol: str, position: 'Position', current_time: datetime) -> bool:
+    
+    def check_exit_conditions(self, conditions: List[Dict], row: Dict[str, Any], position: Position, current_time: datetime) -> bool:
         """Check if exit conditions are met"""
         if not conditions:
             # Default exit conditions
@@ -29,13 +46,21 @@ class ConditionChecker:
                 return True
             return False
         
-        return any(
-            self._check_condition(row, condition)
-            for condition in conditions
-        )
+        conditions_met = []
+        for condition in conditions:
+            condition_met = self._check_condition(row, condition)
+            conditions_met.append(condition_met)
+            if len(conditions_met) == len(conditions):
+                return True, conditions_met, row
+            else:
+                return False, None, None
     
     def _check_condition(self, row: Dict[str, Any], condition_config: Dict) -> bool:
         """Check entry/exit condition"""
+        logger.info(f"Condition Checker: _check_condition() - Checking condition: {condition_config}")
+        logger.info(f"Condition Checker: _check_condition() - Type of condition_config: {type(condition_config)}")
+        logger.info(f"Condition Checker: _check_condition() - Row: {row}")
+        logger.info(f"Condition Checker: _check_condition() - Type of row: {type(row)}")
         valid_comparisons = ['above', 'below', 'between', 'crosses_above', 'crosses_below', 'equals']
         comparison = condition_config.get('comparison')
         

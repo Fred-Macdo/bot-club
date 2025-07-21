@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Any, Dict, Optional, Union
 from pydantic import BaseModel, Field
 from bson import ObjectId
@@ -12,7 +12,7 @@ import logging
 from models.strategy import Strategy
 from models.backtest import BacktestParams, BacktestResult
 from .backtest_engine import BacktestEngine
-from .enums import TradingMode
+from ..utils.enums import TradingMode
 from config import MONGO_DB, SERVICE_PORT, API_SERVICE_URL
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,6 @@ class BacktestService:
     async def create_backtest(self, backtest_params: BacktestParams):
         """Create a new backtest"""
         backtest_data = backtest_params.model_dump()
-        logger.info(f"Creating backtest with data: {backtest_data}")
         result = await self.db['backtests'].insert_one(backtest_data)
         logger.info(f"Backtest created with ID: {result.inserted_id}")
 
@@ -114,6 +113,7 @@ class BacktestService:
             logger.info(f"Backtest_Service: Data Provider: {params['data_provider']}")
             logger.info(f"Starting Backtest from backtest_service to backtest_engine now")
             # Convert params to BacktestParams
+            
             backtest_params = BacktestParams(
                 strategy_id=params['strategy_id'],
                 initial_capital=params['initial_capital'],
@@ -130,7 +130,7 @@ class BacktestService:
                 user_id=params['user_id'],
                 backtest_params=backtest_params
             )
-            
+ 
             # Save results
             await self.db['backtests'].insert_one(result.model_dump())
             

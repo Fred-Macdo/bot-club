@@ -10,13 +10,13 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from models.backtest import BacktestParams, BacktestResult
 from models.user_config import ConfigEncryption
-from .data_manager import DataManager
-from .strategy_executor import StrategyExecutor
-from .performance_calculator import PerformanceCalculator
-from .trade_logger import TradeLogger
-from .live_trading import LiveTradingManager
-from .portfolio_manager import Portfolio, Position, Trade
-from .enums import TradingMode
+from ..data_retrieval.data_manager import DataManager
+from ..trading.strategy_executor import StrategyExecutor
+from ..trading.performance_calculator import PerformanceCalculator
+from ..trading.trade_logger import TradeLogger
+from ..trading.live_trading import LiveTradingManager
+from ..trading.portfolio_manager import Portfolio, Position, Trade
+from ..utils.enums import TradingMode
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ class BacktestEngine:
         """Execute backtest mode"""
         logger.info(f"Running backtest for strategy: {strategy.get('name')}")
         
+        # CLEAR TRADE LOGGERS BEFORE EACH BACKTEST RUN
+        self.trade_logger.clear_trades()
+        self.strategy_executor.trade_logger.clear_trades()
+        
         # Initialize data provider using the data_provider from params
         await self.data_manager.initialize_provider(params.data_provider, user_id)
         
@@ -89,6 +93,7 @@ class BacktestEngine:
         # Create BacktestResult directly from PerformanceCalculator
         backtest_result = self.performance_calculator.create_backtest_result(
             strategy_id=params.strategy_id,
+            user_id=user_id,
             trades=trades,  # Now passing dictionaries instead of Trade objects
             initial_capital=params.initial_capital,
             start_date=params.start_date.isoformat(),
@@ -97,7 +102,10 @@ class BacktestEngine:
             equity_curve=portfolio.get_equity_curve() if hasattr(portfolio, 'get_equity_curve') else None
         )
         
-        logger.info(f"Backtest completed: {len(trades)} trades")
+        # CLEAR TRADE LOGGERS AFTER BACKTEST COMPLETES (cleanup)
+        self.trade_logger.clear_trades()
+        self.strategy_executor.trade_logger.clear_trades()
+        
         return backtest_result
     
     async def _get_strategy_from_db(self, strategy_id: str) -> Optional[Dict[str, Any]]:

@@ -15,7 +15,8 @@ class PerformanceCalculator:
     def create_backtest_result(
         self, 
         strategy_id: str,
-        trades: List[Dict], 
+        user_id: str,
+        trades: List[Dict[str, Any]], 
         initial_capital: float,
         start_date: str,
         end_date: str,
@@ -41,6 +42,7 @@ class PerformanceCalculator:
         
         return BacktestResult(
             strategy_id=strategy_id,
+            user_id=user_id,
             total_return=metrics['total_return'],
             sharpe_ratio=metrics['sharpe_ratio'],
             max_drawdown=metrics['max_drawdown'],

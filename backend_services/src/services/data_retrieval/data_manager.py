@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from ..data_retrieval.data_providers import DataProviderFactory, BaseDataProvider
-from .utils.date_utils import DateUtils
+from .data_providers import DataProviderFactory, BaseDataProvider
+from ..utils.date_utils import DateUtils
 
 logger = logging.getLogger(__name__)
 

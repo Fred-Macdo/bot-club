@@ -23,7 +23,8 @@ class TradeLogger:
         trade_type: str = "long",
         strategy_name: str = "",
         entry_reason: str = "",
-        exit_reason: str = ""
+        exit_reason: str = "",
+        data_context: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Log a completed trade"""
         self.trade_count += 1
@@ -45,9 +46,10 @@ class TradeLogger:
             'strategy_name': strategy_name,
             'entry_reason': entry_reason,
             'exit_reason': exit_reason,
-            'duration': (exit_time - entry_time).total_seconds() / 3600,  # hours
+            'duration': (exit_time - entry_time).total_seconds() / 3600,  # This line correctly calculates duration for each trade.
             'timestamp': datetime.utcnow(),
-            'pnl_emoji': pnl_emoji  # Add emoji to trade data
+            'pnl_emoji': pnl_emoji,
+            'data_context': data_context or []
         }
         
         self.trades.append(trade)
