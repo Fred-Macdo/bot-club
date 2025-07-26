@@ -90,7 +90,7 @@ const StrategyLibraryInterface = () => {
   const { strategies: userStrategies, loading: strategiesLoading, error: strategyError, refreshStrategies } = useStrategy(); // Added error and refreshStrategies
   
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState(0); // 0: All, 1: Default, 2: User
+  const [activeTab, setActiveTab] = useState(0); // 0: All, 1: Default, 2: User, 3: Favorites
   const [favorites, setFavorites] = useState(new Set());
   const [defaultStrategies, setDefaultStrategies] = useState([]);
   const [defaultStrategiesLoading, setDefaultStrategiesLoading] = useState(true);
@@ -159,6 +159,8 @@ const StrategyLibraryInterface = () => {
       filtered = filtered.filter(strategy => strategy.type === 'default');
     } else if (activeTab === 2) {
       filtered = filtered.filter(strategy => strategy.type === 'user');
+    } else if (activeTab === 3) {
+      filtered = filtered.filter(strategy => favorites.has(strategy.id));
     }
 
     // Filter by search term
@@ -174,7 +176,7 @@ const StrategyLibraryInterface = () => {
     }
 
     return filtered;
-  }, [allStrategies, searchTerm, activeTab]);
+  }, [allStrategies, searchTerm, activeTab, favorites]);
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -211,19 +213,12 @@ const StrategyLibraryInterface = () => {
 
   return (
     <Box>
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 'bold', mb: 1 }}>
-          Strategy Library
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Browse and discover trading strategies from our curated library and community
-        </Typography>
-      </Box>
+
 
       {/* Search and Filter Controls */}
       <Paper sx={{ p: 2, mb: 3, borderRadius: 2 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={8}>
+          <Grid item xs={12} md={7}>
             <TextField
               fullWidth
               placeholder="Search strategies by name, description, or indicators..."
@@ -239,7 +234,7 @@ const StrategyLibraryInterface = () => {
               size="small"
             />
           </Grid>
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={5}>
             <Tabs
               value={activeTab}
               onChange={handleTabChange}
@@ -255,6 +250,11 @@ const StrategyLibraryInterface = () => {
               <Tab label={`All (${allStrategies.length})`} />
               <Tab label={`Default (${defaultStrategies.length})`} />
               <Tab label={`My Strategies (${userStrategies.length})`} />
+              <Tab 
+                label={`Favorites (${favorites.size})`}
+                icon={<FavoriteIcon sx={{ fontSize: 16, mr: 0.5 }} />}
+                iconPosition="start"
+              />
             </Tabs>
           </Grid>
         </Grid>
@@ -442,7 +442,7 @@ const StrategyLibraryInterface = () => {
             <Grid item xs={6} sm={3}>
               <Box sx={{ textAlign: 'center' }}>
                 <Typography variant="h4" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
-                  {filteredStrategies.length}
+                  {userStrategies.length + defaultStrategies.length}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                   Total Strategies

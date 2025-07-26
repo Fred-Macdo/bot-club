@@ -476,14 +476,6 @@ ${strategyConfig.indicators.map(indicator =>
     setYamlConfig(generateYamlConfig());
   }, [generateYamlConfig]);return (
     <Box>
-      <Box sx={{ mb: 3, textAlign: 'center' }}>
-        <Typography variant="h5" sx={{ fontWeight: 'bold', mb: 1 }}>
-          Strategy Builder
-        </Typography>
-        <Typography variant="body1" color="text.secondary">
-          Create and customize your own trading strategies using our visual builder
-        </Typography>
-      </Box>
 
       {/* Basic Information Accordion */}
       <Accordion 
@@ -1123,7 +1115,7 @@ ${strategyConfig.indicators.map(indicator =>
                       DCA Strategy Info:
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
-                      • When enabled, strategy can open multiple positions per symbol
+                      • When enabled, strategy can open multiple trades per symbol at different price levels
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
                       • Each entry signal creates a new position (up to max limit)

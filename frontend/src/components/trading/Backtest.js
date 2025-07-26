@@ -192,7 +192,7 @@ const Backtest = () => {
 
   // Main configuration view
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
+    <Container maxWidth="xl" sx={{ py: 4 }}>
       <Typography variant="h4" gutterBottom sx={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>
         Strategy Backtest
       </Typography>
