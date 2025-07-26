@@ -24,7 +24,7 @@ class IndicatorConverter:
             elif name == 'bollinger_bands':
                 params['bollinger_bands'] = {
                     'period': indicator_params.get('period', 20),
-                    'std_dev': indicator_params.get('std_dev', 2)
+                    'std_dev': indicator_params.get('std', 2)
                 }
             elif name == 'atr':
                 params['atr'] = indicator_params
@@ -64,7 +64,7 @@ class IndicatorConverter:
         
         elif name == 'bollinger_bands':
             period = params.get('period')
-            std_dev = params.get('std_dev')
+            std_dev = params.get('std')
             if not period or not isinstance(period, (int, float)) or period <= 0:
                 logger.warning(f"Invalid period for Bollinger Bands: {period}")
                 return False

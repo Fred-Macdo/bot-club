@@ -13,12 +13,7 @@ class ConditionChecker:
         """Check if entry conditions are met"""
         if not conditions:
             return False
-        
-        logger.info(f"Condition Checker: check_entry_conditions() - Conditions: {conditions}")
-        logger.info(f"Condition Checker: check_entry_conditions() - Row: {row}")
-        logger.info(f"Condition Checker: check_entry_conditions() - Type of conditions: {type(conditions)}")
-        logger.info(f"Condition Checker: check_entry_conditions() - Type of row: {type(row)}")
-        
+
         conditions_met = []
         for condition in conditions:
             condition_met = self._check_condition(
@@ -27,10 +22,10 @@ class ConditionChecker:
             )
             conditions_met.append(condition_met)
             
-            if len(conditions_met) == len(conditions):
-                return True, conditions_met, row
-            else:
-                return False, None, None
+        if all(conditions_met):
+            return True, conditions_met, row
+        
+        return False, None, None
         
     
     
@@ -50,17 +45,14 @@ class ConditionChecker:
         for condition in conditions:
             condition_met = self._check_condition(row, condition)
             conditions_met.append(condition_met)
-            if len(conditions_met) == len(conditions):
-                return True, conditions_met, row
-            else:
-                return False, None, None
+            
+        if any(conditions_met):
+            return True, conditions_met, row
+        
+        return False, None, None
     
     def _check_condition(self, row: Dict[str, Any], condition_config: Dict) -> bool:
         """Check entry/exit condition"""
-        logger.info(f"Condition Checker: _check_condition() - Checking condition: {condition_config}")
-        logger.info(f"Condition Checker: _check_condition() - Type of condition_config: {type(condition_config)}")
-        logger.info(f"Condition Checker: _check_condition() - Row: {row}")
-        logger.info(f"Condition Checker: _check_condition() - Type of row: {type(row)}")
         valid_comparisons = ['above', 'below', 'between', 'crosses_above', 'crosses_below', 'equals']
         comparison = condition_config.get('comparison')
         
@@ -165,30 +157,60 @@ class ConditionChecker:
         if indicator_key not in row or f"{indicator_key}_prev" not in row:
             return False
         
+        current_indicator_value = row.get(indicator_key)
+        previous_indicator_value = row.get(f"{indicator_key}_prev")
+
+        if current_indicator_value is None or previous_indicator_value is None:
+            return False
+
         try:
-            indicator_value = float(value)
-            return (indicator_value > row[indicator_key]) and (row[f"{indicator_key}_prev"] <= indicator_value)
+            # Case 1: Compare against a numeric value
+            comparison_value = float(value)
+            return current_indicator_value > comparison_value and previous_indicator_value <= comparison_value
+        
         except (ValueError, TypeError):
+            # Case 2: Compare against another indicator
             if isinstance(value, str):
                 value_key = value.lower()
-                if f"{value_key}_prev" not in row:
+                current_comparison_value = row.get(value_key)
+                previous_comparison_value = row.get(f"{value_key}_prev")
+
+                if current_comparison_value is None or previous_comparison_value is None:
                     return False
-                return (row[indicator_key] > row[value_key]) and (row[f"{indicator_key}_prev"] <= row[f"{value_key}_prev"])
+                
+                return current_indicator_value > current_comparison_value and previous_indicator_value <= previous_comparison_value
+
+        return False
     
     def _check_crosses_below(self, row: Dict[str, Any], indicator_key: str, value: Union[str, int, float]) -> bool:
         """Check if indicator crosses below a value or another indicator"""
         if indicator_key not in row or f"{indicator_key}_prev" not in row:
             return False
         
+        current_indicator_value = row.get(indicator_key)
+        previous_indicator_value = row.get(f"{indicator_key}_prev")
+
+        if current_indicator_value is None or previous_indicator_value is None:
+            return False
+
         try:
-            indicator_value = float(value)
-            return (indicator_value < row[indicator_key]) and (row[f"{indicator_key}_prev"] >= indicator_value)
+            # Case 1: Compare against a numeric value
+            comparison_value = float(value)
+            return current_indicator_value < comparison_value and previous_indicator_value >= comparison_value
+        
         except (ValueError, TypeError):
+            # Case 2: Compare against another indicator
             if isinstance(value, str):
                 value_key = value.lower()
-                if f"{value_key}_prev" not in row:
+                current_comparison_value = row.get(value_key)
+                previous_comparison_value = row.get(f"{value_key}_prev")
+
+                if current_comparison_value is None or previous_comparison_value is None:
                     return False
-                return (row[indicator_key] < row[value_key]) and (row[f"{indicator_key}_prev"] >= row[f"{value_key}_prev"])
+                
+                return current_indicator_value < current_comparison_value and previous_indicator_value >= previous_comparison_value
+
+        return False
     
     def _check_between(self, row: Dict[str, Any], indicator_key: str, value: List[Union[str, int, float]]) -> bool:
         """Check if indicator value is between two bounds"""

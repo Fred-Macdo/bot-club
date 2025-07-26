@@ -23,7 +23,9 @@ import {
   Autocomplete,
   Accordion,
   AccordionSummary,
-  AccordionDetails
+  AccordionDetails,
+  Container,
+  Paper
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -473,7 +475,7 @@ ${strategyConfig.indicators.map(indicator =>
   useEffect(() => {
     setYamlConfig(generateYamlConfig());
   }, [generateYamlConfig]);return (
-    <Box sx={{ maxWidth: 1200, mx: 'auto', px: 2 }}>
+    <Box>
       <Box sx={{ mb: 3, textAlign: 'center' }}>
         <Typography variant="h5" sx={{ fontWeight: 'bold', mb: 1 }}>
           Strategy Builder

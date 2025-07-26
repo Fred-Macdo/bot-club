@@ -75,7 +75,7 @@ class Portfolio:
         """Backward compatibility - uses entry prices"""
         return self.get_total_value()
     
-    def update_equity_history(self, timestamp: datetime, current_prices: Dict[str, float] = None, action: str = None):
+    def update_equity_history(self, timestamp: datetime, current_prices: Dict[str, float] = None, ):
         """Update equity history with current portfolio state"""
         total_portfolio_value = self.get_total_value(current_prices)
         positions_value = total_portfolio_value - self.cash
@@ -84,13 +84,12 @@ class Portfolio:
             'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp,
             'value': total_portfolio_value,
             'cash': self.cash,
-            'positions_value': positions_value,
-            'action': action  # 'buy', 'sell', or None for regular updates
+            'positions_value': positions_value
         }
         
         self.equity_history.append(equity_point)
         
-        logger.debug(f"Equity update: ${total_portfolio_value:.2f} (Cash: ${self.cash:.2f}, Positions: ${positions_value:.2f}) - {action or 'update'}")
+        logger.debug(f"Equity update: ${total_portfolio_value:.2f} (Cash: ${self.cash:.2f}, Positions: ${positions_value:.2f}) - or {'update'}")
     
     def add_position(self, position: Position):
         self.positions[position.symbol] = position

@@ -630,7 +630,7 @@ async def get_user_backtests(
             # Fetch trades for this backtest from the trades collection
             trades_cursor = db.trades.find({"backtest_id": backtest_id})
             trades = await trades_cursor.to_list(length=None)
-            
+            logger.info(f"Backtest Routes: Trades length: {len(trades)}")
             # Get strategy name - try different possible field names
             strategy_id = backtest.get("strategy_id", "")
             strategy_name = backtest.get("strategy_name", "Unknown Strategy")
@@ -651,9 +651,10 @@ async def get_user_backtests(
             
             # Convert trades to TradeDetail objects
             trade_details = []
-            for i, trade in enumerate(trades):
+            trade_counter = 0
+            for trade in trades:
                 trade_details.append(TradeDetail(
-                    id=trade.get("id", trade.get("_id", i)),
+                    id=trade.get("id", trade_counter),
                     symbol=trade.get("symbol", ""),
                     side=trade.get("side", trade.get("trade_type", "long")),
                     entry_date=trade.get("entry_date", trade.get("entry_time", datetime.utcnow())),
@@ -664,7 +665,8 @@ async def get_user_backtests(
                     pnl=trade.get("pnl", 0),
                     return_pct=trade.get("return_pct", trade.get("pnl_pct", 0))
                 ))
-            
+                trade_counter += 1
+            logger.info(f"Backtest Routes: Trade details length: {len(trade_details)}")
             # Handle equity curve - convert from new format
             equity_curve_data = backtest.get("equity_curve", [])
             equity_points = []

@@ -250,20 +250,22 @@ export default function BacktestResults({ strategies = [] }) {
   }
   
   return (
-    <Paper>
-      <Typography variant="h6" sx={{ p: 2 }}>Recent Backtests</Typography>
+    <Paper sx={{ p: 2 }}>
+      <Typography variant="h6" sx={{ mb: 2 }}>Recent Backtests</Typography>
       <TableContainer>
         <Table aria-label="collapsible table">
           <TableHead>
             <TableRow>
               <TableCell />
               <TableCell>Strategy</TableCell>
+              <TableCell>Timeframe</TableCell>
               <TableCell align="right">Return (%)</TableCell>
-              <TableCell align="right">Sharpe</TableCell>
               <TableCell align="right">Drawdown (%)</TableCell>
               <TableCell align="right">Win Rate (%)</TableCell>
               <TableCell align="right">Trades</TableCell>
               <TableCell>Date</TableCell>
+              <TableCell>Start Date</TableCell>
+              <TableCell>End Date</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>

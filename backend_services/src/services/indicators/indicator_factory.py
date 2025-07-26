@@ -97,19 +97,19 @@ class IndicatorFactory:
             pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdhist")
         ]
     
-    def calculate_bollinger_bands(self, period, std_dev):
+    def calculate_bollinger_bands(self, period, std):
         """
         Calculate Bollinger Bands
         
         Args:
             period: Period for Bollinger Bands
-            std_dev: Standard deviation multiplier
+            std: Standard deviation multiplier
         """
         # Bollinger Bands returns a struct with upper, middle, and lower bands
         return [
-            pl.col("close").ta.bbands(period, std_dev).struct.field("upperband").over("symbol").alias(f'upperband'),
-            pl.col("close").ta.bbands(period, std_dev).struct.field("middleband").over("symbol").alias(f'middleband'),
-            pl.col("close").ta.bbands(period, std_dev).struct.field("lowerband").over("symbol").alias(f'lowerband')
+            pl.col("close").ta.bbands(period, std).struct.field("upperband").over("symbol").alias(f'upperband'),
+            pl.col("close").ta.bbands(period, std).struct.field("middleband").over("symbol").alias(f'middleband'),
+            pl.col("close").ta.bbands(period, std).struct.field("lowerband").over("symbol").alias(f'lowerband')
         ]
     
     def calculate_atr(self, period):

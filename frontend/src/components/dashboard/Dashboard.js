@@ -5,7 +5,6 @@ import {
   Typography,
   Grid,
   Paper,
-  Button,
   useTheme,
   Table,
   TableBody,
@@ -16,115 +15,149 @@ import {
   Chip,
   Card,
   CardContent,
-  Divider,
+  Switch,
+  FormControlLabel,
+  Alert,
+  CircularProgress,
+  Button,
 } from '@mui/material';
 import {
-  ZoomIn as ZoomInIcon,
   MonetizationOn as MonetizationOnIcon,
   TrendingUp as TrendingUpIcon,
   TrendingDown as TrendingDownIcon,
   Assessment as AssessmentIcon,
 } from '@mui/icons-material';
 import Plot from 'react-plotly.js';
-import { userConfigApi } from '../../api/Client';
+import { useAlpaca } from '../../context/AlpacaContext';
+import { Link } from 'react-router-dom';
+import GettingStarted from '../docs/GettingStarted';
 
 
 const EquityCurveDashboard = () => {
   const theme = useTheme();
 
+  // Get config from the new context
+  const { 
+    paperConfig, 
+    liveConfig, 
+    isAlpacaConfigured, 
+    loading: configLoading, 
+    error: configError 
+  } = useAlpaca();
+  
+  const [isPaperMode, setIsPaperMode] = useState(false);
+
+  // State for data
   const [accountEquityData, setAccountEquityData] = useState([]);
   const [accountPlotData, setAccountPlotData] = useState([]);
   const [accountPlotLayout, setAccountPlotLayout] = useState({});
   const [dashboardStats, setDashboardStats] = useState(null);
   const [dashboardTrades, setDashboardTrades] = useState([]);
 
+  // State for UI feedback during data fetching
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState(null);
+
+  // Set initial paper/live mode once config is loaded
   useEffect(() => {
-    const generateMockEquity = (initialValue = 10000, days = 180, trendFactor = 0.6) => {
-      const data = [];
-      let currentValue = initialValue;
-      const now = new Date();
-      for (let i = days; i >= 0; i--) {
-        const date = new Date(now);
-        date.setDate(date.getDate() - i);
-        if (date.getDay() === 0 || date.getDay() === 6) continue;
-        const dailyChange = (Math.random() > trendFactor ? -1 : 1) * (Math.random() * 0.02);
-        currentValue *= (1 + dailyChange);
-        data.push({ date, value: currentValue });
+    if (!configLoading && isAlpacaConfigured) {
+      // Default to live if available, otherwise paper
+      setIsPaperMode(!liveConfig);
+    }
+  }, [configLoading, isAlpacaConfigured, liveConfig]);
+
+  // Fetch data from Alpaca when mode or config changes
+  useEffect(() => {
+    if (configLoading || !isAlpacaConfigured) return;
+
+    const fetchAlpacaData = async () => {
+      setDataLoading(true);
+      setDataError(null);
+
+      const config = isPaperMode ? paperConfig : liveConfig;
+
+      if (!config) {
+        setDataError(`The selected account (${isPaperMode ? 'Paper' : 'Live'}) is not configured.`);
+        setDataLoading(false);
+        return;
       }
-      return data;
+
+      const headers = {
+        'APCA-API-KEY-ID': config.key,
+        'APCA-API-SECRET-KEY': config.secret,
+      };
+
+      try {
+        const [account, portfolioHistory, activities] = await Promise.all([
+          fetch(`${config.endpoint}/account`, { headers }).then(res => res.json()),
+          fetch(`${config.endpoint}/account/portfolio/history`, { headers }).then(res => res.json()),
+          fetch(`${config.endpoint}/account/activities`, { headers }).then(res => res.json())
+        ]);
+        
+        if (account.code || portfolioHistory.code || (Array.isArray(activities) && activities.code)) {
+            throw new Error(account.message || portfolioHistory.message || activities.message || 'Invalid API key or secret.');
+        }
+
+        if (portfolioHistory && portfolioHistory.timestamp) {
+          const equityData = portfolioHistory.timestamp.map((ts, index) => ({
+            date: new Date(ts * 1000),
+            value: portfolioHistory.equity[index],
+          }));
+          setAccountEquityData(equityData);
+          
+          const initialCapital = portfolioHistory.equity[0];
+          const finalEquity = parseFloat(account.equity);
+          const totalReturn = ((finalEquity - initialCapital) / initialCapital) * 100;
+          
+          let peak = initialCapital;
+          let maxDrawdown = 0;
+          portfolioHistory.equity.forEach(value => {
+            if (value > peak) peak = value;
+            const drawdown = ((peak - value) / peak) * 100;
+            if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+          });
+
+          const tradeActivities = activities.filter(a => a.activity_type === 'FILL');
+          const winningTrades = tradeActivities.filter(t => parseFloat(t.net_amount) > 0).length;
+
+          setDashboardStats({
+            initialCapital,
+            finalEquity,
+            totalReturn,
+            totalTrades: tradeActivities.length,
+            winningTrades,
+            losingTrades: tradeActivities.length - winningTrades,
+            winRate: tradeActivities.length > 0 ? (winningTrades / tradeActivities.length) * 100 : 0,
+            maxDrawdown: maxDrawdown,
+            sharpeRatio: 'N/A',
+            profitFactor: 'N/A',
+          });
+        }
+        
+        if (Array.isArray(activities)) {
+            const trades = activities.filter(a => a.activity_type === 'FILL').map(trade => ({
+              id: trade.id,
+              symbol: trade.symbol,
+              side: trade.side,
+              entryDate: new Date(trade.transaction_time),
+              entryPrice: parseFloat(trade.price),
+              shares: parseFloat(trade.qty),
+              pnl: parseFloat(trade.net_amount)
+            }));
+            setDashboardTrades(trades);
+        }
+
+      } catch (err) {
+        setDataError(`Failed to load data from Alpaca: ${err.message}`);
+      } finally {
+        setDataLoading(false);
+      }
     };
 
-    const equityData = generateMockEquity(100000, 252);
-    setAccountEquityData(equityData);
-
-    const generateDashboardData = (equityHistory) => {
-      if (!equityHistory || equityHistory.length === 0) {
-        return { stats: {}, trades: [] };
-      }
-      const initialCapital = equityHistory[0].value;
-      const finalEquity = equityHistory[equityHistory.length - 1].value;
-      const totalReturn = ((finalEquity - initialCapital) / initialCapital) * 100;
-
-      const trades = [];
-      for (let i = 0; i < 25; i++) {
-        const entryDayIndex = Math.floor(Math.random() * (equityHistory.length - 10));
-        const exitDayIndex = entryDayIndex + Math.floor(Math.random() * 5) + 5;
-        const entryDate = equityHistory[entryDayIndex].date;
-        const exitDate = equityHistory[exitDayIndex].date;
-        const entryPrice = equityHistory[entryDayIndex].value * (0.05 + Math.random() * 0.1);
-        const shares = Math.floor((initialCapital * 0.01) / entryPrice) || 1;
-        const side = Math.random() > 0.5 ? 'long' : 'short';
-        const exitPrice = entryPrice * (1 + (Math.random() - 0.5) * 0.1);
-        const pnl = (side === 'long' ? exitPrice - entryPrice : entryPrice - exitPrice) * shares;
-        trades.push({
-          id: `trade-${i}`,
-          symbol: ['AAPL', 'MSFT', 'TSLA', 'NVDA', 'GOOG'][Math.floor(Math.random() * 5)],
-          side,
-          entryDate,
-          entryPrice,
-          exitDate,
-          exitPrice,
-          shares,
-          pnl,
-          returnPct: (pnl / (entryPrice * shares)) * 100,
-        });
-      }
-      trades.sort((a, b) => b.exitDate - a.exitDate);
-
-      const winningTrades = trades.filter(t => t.pnl > 0).length;
-      const winRate = trades.length > 0 ? (winningTrades / trades.length) * 100 : 0;
-
-      let peak = initialCapital;
-      let maxDrawdown = 0;
-      equityHistory.forEach(point => {
-        if (point.value > peak) peak = point.value;
-        const drawdown = ((peak - point.value) / peak) * 100;
-        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-      });
-
-      const avgWin = trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.returnPct, 0) / (winningTrades || 1);
-      const avgLoss = trades.filter(t => t.pnl <= 0).reduce((sum, t) => sum + t.returnPct, 0) / ((trades.length - winningTrades) || 1);
-
-      setDashboardStats({
-        initialCapital,
-        finalEquity,
-        totalReturn,
-        totalTrades: trades.length,
-        winningTrades,
-        losingTrades: trades.length - winningTrades,
-        winRate,
-        avgWin: avgWin || 0,
-        avgLoss: avgLoss || 0,
-        maxDrawdown,
-        sharpeRatio: Math.random() * 2 + 0.5,
-        profitFactor: Math.abs(trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / (trades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) || -1)),
-      });
-      setDashboardTrades(trades);
-    };
-
-    generateDashboardData(equityData);
-  }, []);
-
+    fetchAlpacaData();
+  }, [isPaperMode, isAlpacaConfigured, paperConfig, liveConfig, configLoading]);
+  
+  // Update plot when data changes
   useEffect(() => {
     if (accountEquityData.length > 0) {
       const equityTrace = {
@@ -169,16 +202,54 @@ const EquityCurveDashboard = () => {
     }
   }, [accountEquityData, theme.palette]);
 
-  if (!dashboardStats || dashboardTrades.length === 0) {
+  // Handle various loading and error states
+  if (configLoading) {
     return (
       <Container maxWidth="lg" sx={{ py: 4, textAlign: 'center' }}>
-        <Typography>Loading Dashboard Data...</Typography>
+        <CircularProgress />
+        <Typography>Loading Configuration...</Typography>
+      </Container>
+    );
+  }
+
+  if (!isAlpacaConfigured) {
+    return <GettingStarted />;
+  }
+  
+  if (configError || dataError) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4, textAlign: 'center' }}>
+        <Alert severity="error">{configError || dataError}</Alert>
+      </Container>
+    );
+  }
+  
+  if (dataLoading) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4, textAlign: 'center' }}>
+        <CircularProgress />
+        <Typography>Loading Dashboard Data from Alpaca...</Typography>
       </Container>
     );
   }
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
+          Account Dashboard
+        </Typography>
+        <FormControlLabel
+          control={
+            <Switch 
+              checked={isPaperMode} 
+              onChange={() => setIsPaperMode(!isPaperMode)} 
+              disabled={dataLoading || (isPaperMode && !paperConfig) || (!isPaperMode && !liveConfig)}
+            />
+          }
+          label={isPaperMode ? "Paper Account" : "Live Account"}
+        />
+      </Box>
       <Grid container spacing={3}>
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
@@ -206,15 +277,15 @@ const EquityCurveDashboard = () => {
               </Typography>
               <Grid container spacing={1}>
                 <Grid item xs={6} sm={4}><Typography variant="body2">Total Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats.totalTrades}</Typography></Grid>
+                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.totalTrades}</Typography></Grid>
                 <Grid item xs={6} sm={4}><Typography variant="body2">Winning Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>{dashboardStats.winningTrades} ({dashboardStats.winRate?.toFixed(1)}%)</Typography></Grid>
+                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>{dashboardStats?.winningTrades} ({dashboardStats?.winRate?.toFixed(1)}%)</Typography></Grid>
                 <Grid item xs={6} sm={4}><Typography variant="body2">Losing Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats.losingTrades} ({(100 - (dashboardStats.winRate || 0))?.toFixed(1)}%)</Typography></Grid>
+                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats?.losingTrades} ({(100 - (dashboardStats?.winRate || 0))?.toFixed(1)}%)</Typography></Grid>
                 <Grid item xs={6} sm={4}><Typography variant="body2">Avg. Win (%):</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>{dashboardStats.avgWin?.toFixed(2)}%</Typography></Grid>
+                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>N/A</Typography></Grid>
                 <Grid item xs={6} sm={4}><Typography variant="body2">Avg. Loss (%):</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats.avgLoss?.toFixed(2)}%</Typography></Grid>
+                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>N/A</Typography></Grid>
               </Grid>
             </Box>
           </Paper>
@@ -229,13 +300,10 @@ const EquityCurveDashboard = () => {
                   <TableRow>
                     <TableCell>Symbol</TableCell>
                     <TableCell>Side</TableCell>
-                    <TableCell>Entry Date</TableCell>
-                    <TableCell>Entry Price</TableCell>
-                    <TableCell>Exit Date</TableCell>
-                    <TableCell>Exit Price</TableCell>
+                    <TableCell>Date</TableCell>
+                    <TableCell>Price</TableCell>
                     <TableCell>Shares</TableCell>
-                    <TableCell>P&L ($)</TableCell>
-                    <TableCell>Return (%)</TableCell>
+                    <TableCell>Net P&L ($)</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -251,23 +319,16 @@ const EquityCurveDashboard = () => {
                         <Chip label={trade.symbol} size="small" sx={{ bgcolor: theme.palette.primary.light, color: theme.palette.primary.contrastText, fontSize: '0.75rem', height: 20 }} />
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2" sx={{ color: trade.side === 'long' ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
+                        <Typography variant="body2" sx={{ color: trade.side === 'buy' ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
                           {trade.side.toUpperCase()}
                         </Typography>
                       </TableCell>
                       <TableCell>{trade.entryDate.toLocaleDateString()}</TableCell>
                       <TableCell>${trade.entryPrice.toFixed(2)}</TableCell>
-                      <TableCell>{trade.exitDate.toLocaleDateString()}</TableCell>
-                      <TableCell>${trade.exitPrice.toFixed(2)}</TableCell>
                       <TableCell>{trade.shares}</TableCell>
                       <TableCell>
                         <Typography variant="body2" sx={{ color: trade.pnl > 0 ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
                           {trade.pnl > 0 ? '+' : ''}{trade.pnl.toFixed(2)}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="body2" sx={{ color: trade.returnPct > 0 ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
-                          {trade.returnPct > 0 ? '+' : ''}{trade.returnPct.toFixed(2)}%
                         </Typography>
                       </TableCell>
                     </TableRow>
@@ -287,11 +348,11 @@ const EquityCurveDashboard = () => {
                     <MonetizationOnIcon sx={{ color: theme.palette.primary.main, mr: 1 }} />
                     <Typography variant="subtitle2">Total Return</Typography>
                   </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold', color: dashboardStats.totalReturn >= 0 ? theme.palette.success.main : theme.palette.error.main }}>
-                    {dashboardStats.totalReturn >= 0 ? '+' : ''}{dashboardStats.totalReturn?.toFixed(2)}%
+                  <Typography variant="h5" sx={{ fontWeight: 'bold', color: dashboardStats?.totalReturn >= 0 ? theme.palette.success.main : theme.palette.error.main }}>
+                    {dashboardStats?.totalReturn >= 0 ? '+' : ''}{dashboardStats?.totalReturn?.toFixed(2)}%
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    ${dashboardStats.initialCapital?.toFixed(2)} → ${dashboardStats.finalEquity?.toFixed(2)}
+                    ${dashboardStats?.initialCapital?.toFixed(2)} → ${dashboardStats?.finalEquity?.toFixed(2)}
                   </Typography>
                 </CardContent>
               </Card>
@@ -304,10 +365,10 @@ const EquityCurveDashboard = () => {
                     <Typography variant="subtitle2">Win Rate</Typography>
                   </Box>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {dashboardStats.winRate?.toFixed(2)}%
+                    {dashboardStats?.winRate?.toFixed(2)}%
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {dashboardStats.winningTrades} / {dashboardStats.totalTrades} trades
+                    {dashboardStats?.winningTrades} / {dashboardStats?.totalTrades} trades
                   </Typography>
                 </CardContent>
               </Card>
@@ -320,10 +381,10 @@ const EquityCurveDashboard = () => {
                     <Typography variant="subtitle2">Max Drawdown</Typography>
                   </Box>
                   <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>
-                    -{dashboardStats.maxDrawdown?.toFixed(2)}%
+                    -{dashboardStats?.maxDrawdown?.toFixed(2)}%
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Profit Factor: {dashboardStats.profitFactor?.toFixed(2)}
+                    Profit Factor: {dashboardStats?.profitFactor}
                   </Typography>
                 </CardContent>
               </Card>
@@ -336,10 +397,10 @@ const EquityCurveDashboard = () => {
                     <Typography variant="subtitle2">Sharpe Ratio</Typography>
                   </Box>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {dashboardStats.sharpeRatio?.toFixed(2)}
+                    {dashboardStats?.sharpeRatio}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Avg Win: {dashboardStats.avgWin?.toFixed(2)}% | Avg Loss: {dashboardStats.avgLoss?.toFixed(2)}%
+                    Avg Win: N/A | Avg Loss: N/A
                   </Typography>
                 </CardContent>
               </Card>
@@ -352,7 +413,7 @@ const EquityCurveDashboard = () => {
                 Account Overview
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Live Trading Performance
+                {isPaperMode ? "Paper Trading Performance" : "Live Trading Performance"}
               </Typography>
             </Box>
           </Paper>
@@ -363,13 +424,13 @@ const EquityCurveDashboard = () => {
             </Typography>
             <Box sx={{
               p: 2, borderRadius: 1,
-              bgcolor: dashboardStats.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.1)' : 'rgba(211, 47, 47, 0.1)',
-              border: 1, borderColor: dashboardStats.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.3)' : 'rgba(211, 47, 47, 0.3)'
+              bgcolor: dashboardStats?.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.1)' : 'rgba(211, 47, 47, 0.1)',
+              border: 1, borderColor: dashboardStats?.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.3)' : 'rgba(211, 47, 47, 0.3)'
             }}>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Initial Portfolio Value (approx.):</strong> ${dashboardStats.initialCapital?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Current Portfolio Value:</strong> ${dashboardStats.finalEquity?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Absolute Gain/Loss:</strong> ${(dashboardStats.finalEquity - dashboardStats.initialCapital)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 'bold' }}><strong>Total Return:</strong> {dashboardStats.totalReturn >= 0 ? '+' : ''}{dashboardStats.totalReturn?.toFixed(2)}%</Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}><strong>Initial Portfolio Value (approx.):</strong> ${dashboardStats?.initialCapital?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}><strong>Current Portfolio Value:</strong> ${dashboardStats?.finalEquity?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}><strong>Absolute Gain/Loss:</strong> ${(dashboardStats?.finalEquity - dashboardStats?.initialCapital)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 'bold' }}><strong>Total Return:</strong> {dashboardStats?.totalReturn >= 0 ? '+' : ''}{dashboardStats?.totalReturn?.toFixed(2)}%</Typography>
             </Box>
           </Paper>
 
@@ -379,13 +440,13 @@ const EquityCurveDashboard = () => {
             </Typography>
             <Grid container spacing={1}>
               <Grid item xs={6}><Typography variant="body2">Max Drawdown:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats.maxDrawdown?.toFixed(2)}%</Typography></Grid>
+              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats?.maxDrawdown?.toFixed(2)}%</Typography></Grid>
               <Grid item xs={6}><Typography variant="body2">Sharpe Ratio:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats.sharpeRatio?.toFixed(2)}</Typography></Grid>
+              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.sharpeRatio}</Typography></Grid>
               <Grid item xs={6}><Typography variant="body2">Profit Factor:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats.profitFactor?.toFixed(2)}</Typography></Grid>
+              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.profitFactor}</Typography></Grid>
               <Grid item xs={6}><Typography variant="body2">Win Rate:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats.winRate?.toFixed(1)}%</Typography></Grid>
+              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.winRate?.toFixed(1)}%</Typography></Grid>
             </Grid>
           </Paper>
         </Grid>

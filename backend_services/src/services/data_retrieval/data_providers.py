@@ -255,7 +255,7 @@ class PolygonProvider(BaseDataProvider):
             async with session.get(url, params=params) as response:
                 data = await response.json()
                 if response.status == 200:      
-                    logger.info(f"Data Provider: Polygon Response: {data}")
+                    logger.info(f"Data Provider: Polygon Response: {response.status}")
                 else:
                     logger.error(f"Data Provider: Polygon Response: {data}")
 

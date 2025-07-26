@@ -1,135 +1,118 @@
 // src/context/AlpacaContext.js
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../components/router/AuthContext';
+import { userConfigApi } from '../api/Client';
 
 const AlpacaContext = createContext();
 
 export function AlpacaProvider({ children }) {
   const { user } = useAuth();
-  const [alpacaConfig, setAlpacaConfig] = useState(null);
+
+  const [paperConfig, setPaperConfig] = useState(null);
+  const [liveConfig, setLiveConfig] = useState(null);
+  const [polygonConfig, setPolygonConfig] = useState(null);
+  
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Helper function to get auth token
-  const getAuthToken = () => {
-    return localStorage.getItem('token');
-  };
+  const fetchConfig = useCallback(async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-  useEffect(() => {
-    // Get Alpaca configuration from backend API
-    const fetchAlpacaConfig = async () => {
-      if (!user) {
-        setAlpacaConfig(null);
-        setLoading(false);
-        return;
-      }
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await userConfigApi.getConfig();
+      
+      if (response) {
+        const {
+          alpaca_paper_api_key,
+          alpaca_paper_secret_key,
+          alpaca_paper_endpoint,
+          alpaca_live_api_key,
+          alpaca_live_secret_key,
+          alpaca_live_endpoint,
+          polygon_api_key_name,
+          polygon_secret_key
+        } = response;
 
-      try {
-        setLoading(true);
-        const token = getAuthToken();
-        
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/alpaca-config`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setAlpacaConfig(data);
-        } else if (response.status === 404) {
-          // No config found, this is normal for new users
-          setAlpacaConfig(null);
+        if (alpaca_paper_api_key) {
+          setPaperConfig({
+            key: alpaca_paper_api_key,
+            secret: alpaca_paper_secret_key || '',
+            endpoint: alpaca_paper_endpoint || 'https://paper-api.alpaca.markets'
+          });
         } else {
-          console.error('Error fetching Alpaca config:', response.statusText);
-          setAlpacaConfig(null);
+          setPaperConfig(null);
         }
-      } catch (error) {
-        console.error('Error in fetchAlpacaConfig:', error);
-        setAlpacaConfig(null);
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    fetchAlpacaConfig();
+        if (alpaca_live_api_key) {
+          setLiveConfig({
+            key: alpaca_live_api_key,
+            secret: alpaca_live_secret_key || '',
+            endpoint: alpaca_live_endpoint || 'https://api.alpaca.markets'
+          });
+        } else {
+          setLiveConfig(null);
+        }
+
+        if (polygon_api_key_name) {
+          setPolygonConfig({
+            name: polygon_api_key_name,
+            key: polygon_secret_key || ''
+          });
+        } else {
+          setPolygonConfig(null);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch API configurations:', err);
+      setError(err.message || 'Could not load API configurations.');
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
 
-  // Save Alpaca configuration to backend
-  const saveAlpacaConfig = async (config) => {
-    if (!user) return { success: false, error: 'User not authenticated' };
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
 
+  const saveAlpacaConfig = async (configData) => {
     try {
-      const token = getAuthToken();
-      
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/alpaca-config`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          api_key: config.apiKey,
-          api_secret: config.apiSecret,
-          endpoint: config.endpoint,
-          is_paper: config.isPaper
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Update local state with response data
-        setAlpacaConfig(data);
-        
-        return { success: true };
-      } else {
-        const errorData = await response.json();
-        return { success: false, error: errorData.detail || 'Failed to save configuration' };
-      }
+      await userConfigApi.saveAlpacaConfig(configData);
+      // Refetch config after saving to update the context state
+      await fetchConfig(); 
+      return { success: true };
     } catch (error) {
-      console.error('Error saving Alpaca config:', error);
-      return { success: false, error: 'Network error occurred' };
+      console.error('Error saving Alpaca config via context:', error);
+      return { success: false, error: error.message };
     }
   };
 
-  // Test Alpaca API connection
-  const testAlpacaConnection = async (config) => {
+  const savePolygonConfig = async (configData) => {
     try {
-      const token = getAuthToken();
-      
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/alpaca-config/test`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          api_key: config.apiKey,
-          api_secret: config.apiSecret,
-          endpoint: config.endpoint,
-          is_paper: config.isPaper
-        })
-      });
-
-      const data = await response.json();
-      return data;
+      await userConfigApi.savePolygonConfig(configData);
+      await fetchConfig();
+      return { success: true };
     } catch (error) {
-      console.error('Error testing Alpaca connection:', error);
-      return { success: false, error: 'Failed to connect to Alpaca API' };
+      console.error('Error saving Polygon config via context:', error);
+      return { success: false, error: error.message };
     }
   };
 
   const value = {
-    alpacaConfig: alpacaConfig ? {
-      apiKey: alpacaConfig.api_key,
-      apiSecret: alpacaConfig.api_secret,
-      endpoint: alpacaConfig.endpoint,
-      isPaper: alpacaConfig.is_paper
-    } : null,
-    isConfigured: !!alpacaConfig,
+    paperConfig,
+    liveConfig,
+    polygonConfig,
     loading,
+    error,
+    isAlpacaConfigured: !!(paperConfig || liveConfig),
+    isPolygonConfigured: !!polygonConfig,
+    refetchConfig: fetchConfig,
     saveAlpacaConfig,
-    testAlpacaConnection
+    savePolygonConfig
   };
 
   return <AlpacaContext.Provider value={value}>{children}</AlpacaContext.Provider>;

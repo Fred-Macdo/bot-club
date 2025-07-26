@@ -64,17 +64,12 @@ class StrategyExecutor:
                 open_positions[symbol] = []
             
             # Use iter_rows(named=True) to iterate through the DataFrame efficiently
-            for row_dict in enumerate(symbol_df.iter_rows(named=True)):
-                logger.info(f"Strategy Executor: Row Dict: {row_dict}")
-                logger.info(f"Strategy Executor: Type of row_dict: {type(row_dict)}")
-                logger.info(f"Strategy Executor: Row Dict Shape: {len(row_dict)}")
+            for row_dict in symbol_df.iter_rows(named=True):
                 
-                if len(row_dict) == 2: #returns a tuple of (index, row_dict)
-                    row_dict = row_dict[1]
-
+                logger.info(f"----------------------------------------")
                 current_datetime = row_dict['datetime']
                 current_price = row_dict['close']
-                logger.info(f"Strategy Executor: {current_datetime}: {symbol} - {current_price}")
+                logger.info(f"Strategy Executor Current Date, Symbol, Price: {current_datetime}: {symbol} - {current_price}")
                 
                 # Create current prices dictionary for portfolio valuation
                 current_prices = {symbol: current_price}
@@ -90,6 +85,7 @@ class StrategyExecutor:
                     )
                     
                     if should_exit:
+                        logger.info(f"Exit Conditions: {exit_conditions}")
                         logger.info(f"Exit signal for {symbol} position {pos_idx}: {exit_reason}")
                         positions_to_close.append((pos_idx, position, exit_reason))
                 
@@ -104,9 +100,6 @@ class StrategyExecutor:
                     trade = portfolio.close_position(position, close_position_row, current_datetime)
                     
                     if trade:
-                        # Update equity history after sell
-                        portfolio.update_equity_history(current_datetime, current_prices, 'sell')
-                        
                         # Log the trade to TradeLogger
                         self.trade_logger.log_trade(
                             symbol=trade.symbol,
@@ -157,10 +150,7 @@ class StrategyExecutor:
                         
                         if position:
                             open_positions[symbol].append(position)
-                            
-                            # Update equity history after buy
-                            portfolio.update_equity_history(current_datetime, current_prices, 'buy')
-                            
+                                                        
                             # Log entry signal
                             self.trade_logger.log_entry_signal(
                                 symbol,

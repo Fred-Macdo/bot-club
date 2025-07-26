@@ -17,11 +17,13 @@ import {
   ShowChart as ShowChartIcon,
   Bolt as LiveIcon,
   AccountCircle as AccountIcon,
-  Logout as LogoutIcon
+  Logout as LogoutIcon,
+  MenuBook as GettingStartedIcon
 } from '@mui/icons-material';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../router/AuthContext';
 import logo from '../../assets/images/bot-logo.png';
+import GettingStarted from '../docs/GettingStarted';
 
 const drawerWidth = 240;
 
@@ -31,6 +33,7 @@ const Sidebar = () => {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const menuItems = [
+    { label: 'Getting Started', icon: <GettingStartedIcon />, path: '/getting-started' },
     { label: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
     { label: 'Strategy Center', icon: <SettingsIcon />, path: '/strategy-builder' },
     { label: 'Backtest', icon: <ScienceIcon />, path: '/backtest' },

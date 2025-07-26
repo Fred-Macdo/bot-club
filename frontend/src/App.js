@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import AppRouter from './components/router/AppRouter';
 import { StrategyProvider } from './context/StrategyContext';
 import { AuthProvider } from './components/router/AuthContext';
+import { AlpacaProvider } from './context/AlpacaContext';
 import { Box } from '@mui/material';
 import ThemeToggle from './components/common/ThemeToggle';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
@@ -122,9 +123,11 @@ function App() {
 
       <AuthProvider>
         <StrategyProvider>
-          <BrowserRouter>
-            <AppRouter />
-          </BrowserRouter>
+          <AlpacaProvider>
+            <BrowserRouter>
+              <AppRouter />
+            </BrowserRouter>
+          </AlpacaProvider>
         </StrategyProvider>
       </AuthProvider>
     </ThemeProvider>
