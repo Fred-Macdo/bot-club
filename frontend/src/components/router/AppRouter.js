@@ -7,7 +7,7 @@ import LoginPage from '../auth/LoginPage';
 import RegisterPage from '../auth/RegisterPage';
 import Dashboard from '../dashboard/Dashboard';
 import StrategyBuilderPage from '../strategy/StrategyBuilder';
-import Backtest from '../trading/Backtest';
+import Backtest from '../backtest/Backtest';
 import PaperTradingPage from '../trading/PaperTrade';
 import LiveTradingPage from '../trading/LiveTrade';
 import AccountSettings from '../account/AccountSettings';

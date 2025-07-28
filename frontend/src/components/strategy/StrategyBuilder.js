@@ -5,13 +5,15 @@ import {
   Typography, 
   Tabs, 
   Tab, 
-  Paper
+  Paper,
+  useTheme
 } from '@mui/material';
 import StrategyLibraryInterface from '../strategy/StrategyLibraryInterface';
 import StrategyBuilderInterface from '../strategy/StrategyBuilderInterface';
 
 // Strategy Center Main Page - Container for Strategy Library and Builder
 const StrategyCenterPage = () => {
+  const theme = useTheme();
   const [activeTab, setActiveTab] = useState(0); // 0: Library, 1: Builder
 
   return (
@@ -30,10 +32,23 @@ const StrategyCenterPage = () => {
           sx={{ 
             borderBottom: 1, 
             borderColor: 'divider',
+            bgcolor: theme.palette.primary.main,
+            borderRadius: '8px 8px 0 0',
             '& .MuiTab-root': { 
               textTransform: 'none',
               fontSize: '1rem',
-              fontWeight: 500
+              fontWeight: 500,
+              color: theme.palette.secondary.main
+            },
+            '& .Mui-selected': { 
+              color: 'rgba(255, 255, 255, 0.7)' 
+            }
+          }}
+          TabIndicatorProps={{
+            style: {
+              backgroundColor: theme.palette.secondary.main,
+              height: 4,
+              borderRadius: 2,
             }
           }}
         >

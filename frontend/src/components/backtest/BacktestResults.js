@@ -102,16 +102,18 @@ const Row = ({ row, strategy }) => {
             {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
           </IconButton>
         </TableCell>
-        <TableCell>{strategy?.name || 'N/A'}</TableCell>
-        <TableCell align="right">{performance.total_return?.toFixed(2) ?? 'N/A'}%</TableCell>
-        <TableCell align="right">{performance.sharpe_ratio?.toFixed(2) ?? 'N/A'}</TableCell>
-        <TableCell align="right">{performance.max_drawdown?.toFixed(2) ?? 'N/A'}%</TableCell>
+        <TableCell>{strategy?.name || backtest.strategy_name || 'N/A'}</TableCell>
+        <TableCell>{backtest.timeframe}</TableCell>
+        <TableCell align="right">{backtest.total_return?.toFixed(2) ?? 'N/A'}%</TableCell>
+        <TableCell align="right">{backtest.max_drawdown?.toFixed(2) ?? 'N/A'}%</TableCell>
         <TableCell align="right">{performance.win_rate?.toFixed(2) ?? 'N/A'}%</TableCell>
-        <TableCell align="right">{performance.total_trades ?? 'N/A'}</TableCell>
+        <TableCell align="right">{backtest.total_trades ?? 'N/A'}</TableCell>
         <TableCell>{new Date(backtest.created_at).toLocaleDateString()}</TableCell>
+        <TableCell>{new Date(backtest.start_date).toLocaleDateString()}</TableCell>
+        <TableCell>{new Date(backtest.end_date).toLocaleDateString()}</TableCell>
       </TableRow>
       <TableRow>
-        <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={8}>
+        <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={10}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             <Box sx={{ margin: 1, padding: 2, backgroundColor: theme.palette.background.default, borderRadius: 1 }}>
               <Typography variant="h6" gutterBottom component="div">
@@ -263,7 +265,7 @@ export default function BacktestResults({ strategies = [] }) {
               <TableCell align="right">Drawdown (%)</TableCell>
               <TableCell align="right">Win Rate (%)</TableCell>
               <TableCell align="right">Trades</TableCell>
-              <TableCell>Date</TableCell>
+              <TableCell>Backtest Date</TableCell>
               <TableCell>Start Date</TableCell>
               <TableCell>End Date</TableCell>
             </TableRow>
@@ -275,7 +277,7 @@ export default function BacktestResults({ strategies = [] }) {
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={10} align="center">
                   No backtest history found.
                 </TableCell>
               </TableRow>

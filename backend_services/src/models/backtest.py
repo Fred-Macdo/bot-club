@@ -6,6 +6,7 @@ from bson import ObjectId
 class BacktestParams(BaseModel):
     """Parameters for running a backtest"""
     strategy_id: str
+    user_id: str
     initial_capital: float
     timeframe: str
     start_date: date

@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List, Union
 from datetime import datetime
 
-from ..trading.portfolio_manager import Position
+from ..utils.portfolio_manager import Position
 
 logger = logging.getLogger(__name__)
 

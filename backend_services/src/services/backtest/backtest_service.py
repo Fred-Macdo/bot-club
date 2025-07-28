@@ -116,6 +116,7 @@ class BacktestService:
             
             backtest_params = BacktestParams(
                 strategy_id=params['strategy_id'],
+                user_id=params['user_id'],
                 initial_capital=params['initial_capital'],
                 timeframe=params['timeframe'],
                 start_date=datetime.strptime(params['start_date'], '%Y-%m-%d').date(),
@@ -123,13 +124,8 @@ class BacktestService:
                 data_provider=params['data_provider']
             )
             
-            # Run the backtest using the engine - FIXED: use run_trading instead of run_backtest
-            result = await self.backtest_engine.run_trading(
-                strategy_id=params['strategy_id'],
-                mode=TradingMode.BACKTEST,
-                user_id=params['user_id'],
-                backtest_params=backtest_params
-            )
+            # Run the backtest using the engine
+            result = await self.backtest_engine.run(backtest_params)
  
             # Save results
             await self.db['backtests'].insert_one(result.model_dump())
@@ -154,65 +150,6 @@ class BacktestService:
             {"$set": {"status": "cancelled"}}
         )
         return result.modified_count > 0
-
-    async def run_trading(
-        self, 
-        strategy_id: str, 
-        mode: TradingMode,
-        user_id: str,
-        alpaca_config: Optional[Dict[str, Any]] = None,
-        backtest_params: Optional[BacktestParams] = None
-    ) -> Union[BacktestResult, Dict[str, Any]]:
-        """
-        Unified method to run trading in any mode
-        
-        Args:
-            strategy_id: Backtest executionID to execute
-            mode: Trading mode (backtest, paper, live)
-            user_id: User ID for authentication
-            alpaca_config: Alpaca API configuration for live/paper trading
-            backtest_params: Backtest parameters (only for backtest mode)
-            
-        Returns:
-            BacktestResult for backtest mode, status dict for live/paper mode
-        """
-        logger.info(f"Starting {mode.value} trading for strategy: {strategy_id}")
-        
-        # Get Backtest executionfrom database
-        strategy = await self._get_strategy_from_db(strategy_id)
-        if not strategy:
-            raise ValueError(f"Strategy {strategy_id} not found")
-        
-        if mode == TradingMode.BACKTEST:
-            if not backtest_params:
-                raise ValueError("Backtest parameters required for backtest mode")
-            return await self.backtest_engine.run_trading(
-                strategy_id=strategy_id,
-                mode=mode,
-                user_id=user_id,
-                backtest_params=backtest_params
-            )
-        
-        elif mode in [TradingMode.PAPER, TradingMode.LIVE]:
-            if not alpaca_config:
-                raise ValueError("Alpaca configuration required for live/paper trading")
-            return await self.backtest_engine.run_trading(
-                strategy_id=strategy_id,
-                mode=mode,
-                user_id=user_id,
-                alpaca_config=alpaca_config
-            )
-        
-        else:
-            raise ValueError(f"Invalid trading mode: {mode}")
-
-    async def stop_trading(self, strategy_id: str) -> Dict[str, Any]:
-        """Stop live/paper trading for a strategy"""
-        return await self.backtest_engine.stop_trading(strategy_id)
-
-    async def get_trading_status(self, strategy_id: str) -> Dict[str, Any]:
-        """Get current trading status"""
-        return await self.backtest_engine.get_trading_status(strategy_id)
 
     async def shutdown(self):
         """Shutdown the service"""

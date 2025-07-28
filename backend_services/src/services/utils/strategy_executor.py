@@ -10,14 +10,17 @@ from .trade_logger import TradeLogger
 from ..utils.condition_checker import ConditionChecker
 from ..utils.indicator_converter import IndicatorConverter
 from ..utils.date_utils import DateUtils
+from ..utils.enums import TradingMode
 
 logger = logging.getLogger(__name__)
 
 class StrategyExecutor:
     """Handles strategy execution logic"""
     
-    def __init__(self, db):
+    def __init__(self, db, user_id: str, mode: TradingMode = TradingMode.BACKTEST):
         self.db = db
+        self.user_id = user_id
+        self.mode = mode
         self.condition_checker = ConditionChecker()
         self.indicator_converter = IndicatorConverter()
         self.trade_logger = TradeLogger()
@@ -184,13 +187,13 @@ class StrategyExecutor:
                         
                         # Close all remaining positions for this symbol
                         for position in positions:
-                            mock_row = {
+                            final_row = {
                                 'symbol': symbol,
                                 'close': final_price,
                                 'datetime': final_datetime
                             }
                             
-                            trade = portfolio.close_position(position, mock_row, final_datetime)
+                            trade = portfolio.close_position(position, final_row, final_datetime)
                             
                             if trade:
                                 # Log the final trade

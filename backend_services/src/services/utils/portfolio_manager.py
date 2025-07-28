@@ -49,7 +49,7 @@ class Trade:
             'return_pct': self.pnl_pct  # Add return percentage
         }
 
-class Portfolio:
+class  Portfolio:
     """Portfolio tracking class"""
     
     def __init__(self, initial_capital: float):
