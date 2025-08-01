@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 import polars as pl
@@ -14,6 +14,7 @@ from ..utils.condition_checker import ConditionChecker
 from ..utils.enums import TradingMode
 from ..utils.indicator_converter import IndicatorConverter
 from ..utils.trade_logger import TradeLogger
+from ..utils.websocket_manager import WebSocketLogHandler
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +28,26 @@ class LiveStrategyExecutor:
         user_id: str,
         mode: TradingMode,
         strategy: Dict[str, Any],
+        strategy_id: str,
+        data_provider: str
     ):
         self.db = db
         self.user_id = user_id
         self.mode = mode
-
+        self.strategy_id = strategy_id
         self.strategy = strategy
+        self.data_provider = data_provider
         self.condition_checker = ConditionChecker()
         self.indicator_converter = IndicatorConverter()
-        self.trade_logger = TradeLogger(db=db, user_id=user_id, mode=mode)
+        self.trade_logger = TradeLogger()
         self.is_running = False
         self._stop_event = asyncio.Event()
+
+        # Add the WebSocket handler to the logger
+        self.logger = logging.getLogger(f"{__name__}.{strategy_id}")
+        self.logger.addHandler(WebSocketLogHandler(strategy_id=self.strategy_id))
+        self.logger.setLevel(logging.INFO)
+
 
     async def start(self):
         """Starts the live strategy execution loop."""
@@ -52,17 +62,20 @@ class LiveStrategyExecutor:
         timeframe = config.get("timeframe", "15Min")  # Default to 15 minutes
         
         data_manager = DataManager(self.db)
+        
+        # Initialize the data provider - THIS WAS MISSING!
+        await data_manager.initialize_provider(self.data_provider, self.user_id)
 
         while not self._stop_event.is_set():
             try:
-                logger.info("Fetching new market data...")
+                self.logger.info("Fetching new market data...")
                 
                 # We need enough data to calculate indicators, so we fetch a range.
                 # A lookback of 100 periods should be sufficient for most indicators.
-                market_data = await data_manager.fetch_data(symbols, "1D", timeframe, limit=100)
+                market_data = await data_manager.fetch_data(symbols, timeframe, limit=100, data_provider=self.data_provider)
 
                 if market_data.is_empty():
-                    logger.warning("No market data fetched. Waiting for next interval.")
+                    self.logger.warning("No market data fetched. Waiting for next interval.")
                     await asyncio.sleep(self._get_sleep_duration(timeframe))
                     continue
 
@@ -71,14 +84,14 @@ class LiveStrategyExecutor:
                 await asyncio.sleep(self._get_sleep_duration(timeframe))
 
             except Exception as e:
-                logger.error(f"An error occurred in the trading loop: {e}", exc_info=True)
+                self.logger.error(f"An error occurred in the trading loop: {e}", exc_info=True)
                 await asyncio.sleep(60)  # Wait a minute before retrying on error
 
     async def stop(self):
         """Stops the live strategy execution loop."""
         self.is_running = False
         self._stop_event.set()
-        logger.info("Live strategy executor stopping...")
+        self.logger.info("Live strategy executor stopping...")
 
     def _get_sleep_duration(self, timeframe: str) -> int:
         """Determines sleep duration in seconds based on timeframe."""
@@ -88,11 +101,11 @@ class LiveStrategyExecutor:
             return int(timeframe.replace("Hour", "")) * 3600
         elif "Day" in timeframe:
             return int(timeframe.replace("Day", "")) * 86400
-        return 60  # Default to 1 minute for unknown timeframes
+        return 10  # Default to 1 minute for unknown timeframes
 
     async def _process_market_data(self, data: pl.DataFrame, config: Dict, symbols: List[str]):
         """Processes fetched market data to check for trading signals."""
-        logger.info("Processing market data for signals...")
+        self.logger.info("Processing market data for signals...")
         indicator_params = self.indicator_converter.convert_indicators_to_params(config.get("indicators", []))
         risk_management = config.get("risk_management", {})
         
@@ -130,7 +143,7 @@ class LiveStrategyExecutor:
             current_time=latest_data['datetime']
         )
         if should_exit:
-            logger.info(f"Exit signal for {symbol}: {reason}")
+            self.logger.info(f"Exit signal for {symbol}: {reason}")
 
             last_trade = await self.db['trades'].find_one(
                 {"user_id": self.user_id, "symbol": symbol, "mode": self.mode.value},
@@ -187,7 +200,7 @@ class LiveStrategyExecutor:
             })
 
             if current_entry_count >= max_positions:
-                logger.info(f"DCA max positions ({max_positions}) reached for {symbol}. No new entry.")
+                self.logger.info(f"DCA max positions ({max_positions}) reached for {symbol}. No new entry.")
                 return
 
         should_enter, reason, _ = self.condition_checker.check_entry_conditions(
@@ -195,7 +208,7 @@ class LiveStrategyExecutor:
             row=latest_data
         )
         if should_enter:
-            logger.info(f"Entry signal for {symbol}: {reason}")
+            self.logger.info(f"Entry signal for {symbol}: {reason}")
 
             position_sizing_method = risk_management.get("position_sizing_method", "fixed")
             risk_per_trade = risk_management.get("risk_per_trade")
@@ -214,14 +227,14 @@ class LiveStrategyExecutor:
                     if risk_per_share > 0:
                         quantity = risk_amount / risk_per_share
                 except Exception as e:
-                    logger.error(f"Error calculating position size: {e}")
+                    self.logger.error(f"Error calculating position size: {e}")
                     return
             else:
-                logger.warning("Position sizing method not supported or configured properly. Cannot place trade.")
+                self.logger.warning("Position sizing method not supported or configured properly. Cannot place trade.")
                 return
 
             if quantity <= 0:
-                logger.info(f"Calculated quantity for {symbol} is {quantity}. Skipping trade.")
+                self.logger.info(f"Calculated quantity for {symbol} is {quantity}. Skipping trade.")
                 return
 
             stop_loss_price = current_price * (1 - Decimal(str(stop_loss))) if stop_loss else None
@@ -237,7 +250,7 @@ class LiveStrategyExecutor:
                     stop_loss_price=stop_loss_price,
                     take_profit_price=take_profit_price
                 )
-                logger.info(f"Submitted bracket order for {symbol}: {order}")
+                self.logger.info(f"Submitted bracket order for {symbol}: {order}")
                 # Log entry signal with trade details
                 self.trade_logger.log_entry_signal(
                     symbol,
@@ -247,7 +260,7 @@ class LiveStrategyExecutor:
                     [reason]
                 )
             except Exception as e:
-                logger.error(f"Failed to submit order for {symbol}: {e}", exc_info=True)
+                self.logger.error(f"Failed to submit order for {symbol}: {e}", exc_info=True)
 
     async def _get_portfolio_manager(self):
         user_config = await self.db['user_config'].find_one({"user_id": self.user_id})
@@ -270,7 +283,7 @@ class LiveStrategyExecutor:
                 decrypted_api_key = ConfigEncryption.decrypt_value(api_key)
                 decrypted_secret = ConfigEncryption.decrypt_value(secret_key)
             except Exception as e:
-                logger.warning(f"Could not decrypt secret key, using as-is: {e}")
+                self.logger.warning(f"Could not decrypt secret key, using as-is: {e}")
                 decrypted_secret = secret_key
 
         return AlpacaPortfolioManager(api_key=decrypted_api_key, 

@@ -23,9 +23,6 @@ BACKTEST_COLLECTION = "backtest_result"
 # backend/app/crud/strategy.py
 async def get_strategies_by_user_id(db: AsyncIOMotorDatabase, user_id: Union[str, PyObjectId]) -> List[Strategy]:
     """Get all strategies for a specific user (match both ObjectId and str user_id fields)"""
-    print(f"DEBUG CRUD: Searching for strategies with user_id: {user_id}")
-    print(f"DEBUG CRUD: user_id type: {type(user_id)}")
-    
     strategies_collection = db.strategy
     # Match both ObjectId and string user_id
     user_id_str = str(user_id)
@@ -37,33 +34,26 @@ async def get_strategies_by_user_id(db: AsyncIOMotorDatabase, user_id: Union[str
     
     # Count total documents
     total_count = await strategies_collection.count_documents(query)
-    print(f"DEBUG CRUD: Found {total_count} documents matching user_id (any type)")
     
     strategies = []
     async for strategy_doc in cursor:
-        print(f"DEBUG CRUD: Processing strategy: {strategy_doc.get('name')}")
-        print(f"DEBUG CRUD: Strategy document keys: {list(strategy_doc.keys())}")
-        
+                
         try:
             # Try to create Strategy object
             strategy = Strategy(**strategy_doc)
             strategies.append(strategy)
-            print(f"DEBUG CRUD: Successfully parsed strategy: {strategy.name}")
         except Exception as e:
-            print(f"DEBUG CRUD: Failed to parse strategy '{strategy_doc.get('name')}': {str(e)}")
-            print(f"DEBUG CRUD: Document structure: {strategy_doc}")
-            
+            print(f"DEBUG CRUD: Error parsing strategy: {str(e)}")
+
             # Try to fix common issues
             fixed_doc = fix_strategy_document(strategy_doc)
             if fixed_doc:
                 try:
                     strategy = Strategy(**fixed_doc)
                     strategies.append(strategy)
-                    print(f"DEBUG CRUD: Successfully parsed FIXED strategy: {strategy.name}")
                 except Exception as e2:
                     print(f"DEBUG CRUD: Even fixed strategy failed: {str(e2)}")
     
-    print(f"DEBUG CRUD: Returning {len(strategies)} successfully parsed strategies")
     return strategies
 
 def fix_strategy_document(doc: dict) -> dict:
@@ -73,7 +63,6 @@ def fix_strategy_document(doc: dict) -> dict:
         
         # Ensure required fields exist
         if 'config' not in fixed_doc or not fixed_doc['config']:
-            print("DEBUG CRUD: Missing or empty config, creating default")
             fixed_doc['config'] = {
                 'symbols': ['AAPL'],
                 'timeframe': '1d',

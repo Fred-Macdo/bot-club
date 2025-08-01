@@ -345,20 +345,14 @@ export const userConfigApi = {
 
 // 📊 TRADING API
 export const tradingApi = {
-  async getPortfolio() {
-    return apiClient.get('/api/trading/portfolio');
+  async startLiveTrading(strategyId) {
+    console.log('tradingApi.startLiveTrading() called, sending strategyId:', strategyId);
+    return apiClient.post('/api/trading/live', { strategy_id: strategyId });  
   },
 
-  async getTradingHistory(limit = 50, offset = 0) {
-    return apiClient.get(`/api/trading/history?limit=${limit}&offset=${offset}`);
-  },
-
-  async getActivePositions() {
-    return apiClient.get('/api/trading/positions');
-  },
-
-  async getPerformanceMetrics(timeframe = '30d') {
-    return apiClient.get(`/api/trading/performance?timeframe=${timeframe}`);
+  async stopTrading(strategyId) {
+    console.log(`tradingApi.stopTrading() called for strategy ${strategyId}`);
+    return apiClient.post('/api/trading/stop', { strategy_id: strategyId });
   }
 };
 
@@ -395,9 +389,36 @@ export const fetchDefaultStrategies = async () => {
     const strategies = await strategyApi.getDefaultStrategies();
     return { success: true, strategies };
   } catch (error) {
-    return { success: false, error: error.message, strategies: [] };
+    console.error("Error fetching default strategies:", error);
+    return { success: false, error: error.message };
   }
 };
+
+export const deployStrategy = async (strategyId, mode, dataProvider) => {
+  try {
+    const payload = {
+      strategy_id: strategyId,
+      mode: mode,
+      data_provider: dataProvider,
+    };
+    console.log('deployStrategy payload:', payload);
+    const response = await apiClient.post('/api/trading/run', payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    console.error(`Error deploying ${mode} strategy:`, error);
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const stopStrategy = async (strategyId, mode) => {
+    try {
+      const result = await tradingApi.stopTrading(strategyId);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error(`Error stopping ${mode} strategy:`, error);
+      return { success: false, error: error.message };
+    }
+  };
 
 export const fetchUserStrategies = async (userId) => {
   try {

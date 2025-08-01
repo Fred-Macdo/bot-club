@@ -1,108 +1,95 @@
-from datetime import datetime
-from typing import Dict, Any, Optional
-from motor.motor_asyncio import AsyncIOMotorDatabase
-import logging
-from bson import ObjectId
 import asyncio
+import logging
+from typing import Dict, Any
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from ...models.backtest import BacktestParams
-from ..trading.alpaca_trading_service import AlpacaTradingService
 from ..utils.enums import TradingMode
+from ..utils.live_strategy_executor import LiveStrategyExecutor
 
 logger = logging.getLogger(__name__)
 
 class TradingService:
-    """
-    This class is responsible for managing live and paper trading sessions.
-    """
+    """Manages live and paper trading sessions."""
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
-        self.active_sessions: Dict[str, asyncio.Task] = {}
+        self.live_executors: Dict[str, LiveStrategyExecutor] = {}
 
-    async def _get_strategy_from_db(self, strategy_id: str) -> Optional[Dict[str, Any]]:
-        """Get strategy from database"""
-        try:
-            object_id = ObjectId(strategy_id)
-        except Exception:
-            raise ValueError(f"Invalid strategy_id format: {strategy_id}")
-
-        strategy_doc = await self.db['default_strategies'].find_one({'_id': object_id})
-        if strategy_doc is None:
-            strategy_doc = await self.db['strategy'].find_one({'_id': object_id})
-        
-        if strategy_doc is None:
-            logger.warning(f"Strategy {strategy_id} not found in default_strategies or strategy collections.")
-            return None
-        
-        return strategy_doc
-
-    async def run_trading(
-        self, 
-        strategy_id: str, 
-        mode: TradingMode,
-        user_id: str,
-        alpaca_config: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Unified method to run trading in paper or live mode.
-        """
-        logger.info(f"Starting {mode.value} trading for strategy: {strategy_id}")
-        
-        strategy = await self._get_strategy_from_db(strategy_id)
-        if not strategy:
-            raise ValueError(f"Strategy {strategy_id} not found")
-
-        if strategy_id in self.active_sessions and not self.active_sessions[strategy_id].done():
-            logger.warning(f"Trading session for strategy {strategy_id} is already running.")
+    async def start_trading_session(self, strategy_id: str, user_id: str, mode: TradingMode, data_provider: str):
+        """Starts a new trading session (live or paper)."""
+        if strategy_id in self.live_executors and self.live_executors[strategy_id].is_running:
+            logger.warning(f"DEBUG TRADING SERVICE: Strategy {strategy_id} is already running.")
             return {"status": "already_running", "strategy_id": strategy_id}
+
+        strategy_doc = await self.get_strategy_by_id(strategy_id)
+        if not strategy_doc:
+            logger.error(f"DEBUG TRADING SERVICE: Strategy {strategy_id} not found.")
+            return {"status": "not_found", "strategy_id": strategy_id}
+
+        logger.info(f"DEBUG TRADING SERVICE: Starting {mode.value} trading for strategy: {strategy_id}")
+        executor = LiveStrategyExecutor(
+            db=self.db,
+            user_id=user_id,
+            mode=mode,
+            strategy=strategy_doc,
+            strategy_id=strategy_id,
+            data_provider=data_provider
+        )
+        self.live_executors[strategy_id] = executor
+
+        # Run the executor in a background task
+        asyncio.create_task(executor.start())
         
-        if mode in [TradingMode.PAPER, TradingMode.LIVE]:
-            if not alpaca_config:
-                raise ValueError("Alpaca configuration required for live/paper trading")
+        return {"status": "started", "strategy_id": strategy_id}
+
+    async def stop_trading_session(self, strategy_id: str):
+        """Stops a running trading session and waits for it to terminate."""
+        executor = self.live_executors.get(strategy_id)
+        
+        if executor and executor.is_running:
+            logger.info(f"Stopping trading session for strategy: {strategy_id}")
             
-            # A factory here could select the appropriate broker service in the future
-            trading_service_instance = AlpacaTradingService(
-                db=self.db,
-                user_id=user_id,
-                mode=mode,
-                strategy_id=strategy_id
-            )
-
-            session_task = asyncio.create_task(
-                trading_service_instance.run(strategy)
-            )
-
-            self.active_sessions[strategy_id] = session_task
-            return {"status": "started", "strategy_id": strategy_id}
-        else:
-            raise ValueError(f"Invalid trading mode for this service: {mode}.")
-
-    async def stop_trading(self, strategy_id: str) -> Dict[str, Any]:
-        """Stop a trading session."""
-        if strategy_id in self.active_sessions:
-            task = self.active_sessions[strategy_id]
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass  # Cancellation is expected
-                del self.active_sessions[strategy_id]
-                logger.info(f"Stopped trading session for strategy {strategy_id}")
-                return {"status": "stopped", "strategy_id": strategy_id}
+            # Signal the executor to stop
+            await executor.stop()
+            
+            # Optionally, wait for the task to complete if `stop` doesn't block
+            # This depends on the implementation of `LiveStrategyExecutor.stop()`
+            # For now, we assume `stop` is asynchronous and handles cleanup.
+            
+            # Remove the executor from the active list
+            if strategy_id in self.live_executors:
+                del self.live_executors[strategy_id]
+            
+            logger.info(f"Successfully stopped and removed executor for strategy: {strategy_id}")
+            return {"status": "stopped", "strategy_id": strategy_id}
         
-        logger.warning(f"No active trading session found to stop for strategy {strategy_id}")
+        logger.warning(f"Attempted to stop a non-running or non-existent strategy: {strategy_id}")
+        return {"status": "not_running", "strategy_id": strategy_id}
+
+    def get_trading_session_status(self, strategy_id: str):
+        """Gets the status of a trading session."""
+        if strategy_id in self.live_executors:
+            is_running = self.live_executors[strategy_id].is_running
+            return {"status": "running" if is_running else "stopped", "strategy_id": strategy_id}
         return {"status": "not_found", "strategy_id": strategy_id}
 
-    async def get_trading_status(self, strategy_id: str) -> Dict[str, Any]:
-        """Get the status of a trading session."""
-        if strategy_id in self.active_sessions:
-            task = self.active_sessions[strategy_id]
-            if task.done():
-                if task.exception():
-                    logger.error(f"Trading session for {strategy_id} failed: {task.exception()}")
-                    return {"status": "failed", "error": str(task.exception())}
-                return {"status": "finished"}
-            return {"status": "running"}
-            
-        return {"status": "not_found"} 
+    async def shutdown(self):
+        """Shuts down all running trading sessions."""
+        logger.info("Shutting down all active trading sessions...")
+        for executor in self.live_executors.values():
+            if executor.is_running:
+                await executor.stop()
+        self.live_executors.clear()
+        logger.info("All trading sessions stopped.") 
+
+    async def get_strategy_by_id(self, strategy_id: str):
+        """Gets a strategy by its ID. Tries default_strategies first, then strategies collection."""
+        try:
+            strategy_doc = await self.db.default_strategies.find_one({"_id": ObjectId(strategy_id)})
+            if not strategy_doc:
+                strategy_doc = await self.db.strategy.find_one({"_id": ObjectId(strategy_id)})
+            return strategy_doc
+        except Exception as e:
+            logger.error(f"Error getting strategy by ID: {e}")
+            return None
+        

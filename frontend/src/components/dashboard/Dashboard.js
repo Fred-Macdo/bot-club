@@ -4,36 +4,24 @@ import {
   Container,
   Typography,
   Grid,
-  Paper,
   useTheme,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Chip,
-  Card,
-  CardContent,
   Switch,
   FormControlLabel,
   Alert,
   CircularProgress,
-  Button,
-  TableSortLabel,
 } from '@mui/material';
-import {
-  MonetizationOn as MonetizationOnIcon,
-  TrendingUp as TrendingUpIcon,
-  TrendingDown as TrendingDownIcon,
-  Assessment as AssessmentIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material';
-import Plot from 'react-plotly.js';
 import { useAlpaca } from '../../context/AlpacaContext';
-import { Link } from 'react-router-dom';
 import GettingStarted from '../docs/GettingStarted';
 import Watchlist from './Watchlist';
+
+// Import all the new subcomponents
+import AccountPerformanceChart from './subcomponents/AccountPerformanceChart';
+import PerformanceAnalytics from './subcomponents/PerformanceAnalytics';
+import DashboardStatsCards from './subcomponents/DashboardStatsCards';
+import DeployedStrategies from './subcomponents/DeployedStrategies';
+import PortfolioSnapshot from './subcomponents/PortfolioSnapshot';
+import KeyRiskMetrics from './subcomponents/KeyRiskMetrics';
+import RecentActivityTable from './subcomponents/RecentActivityTable';
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
 const CACHE_KEY_PREFIX = 'dashboard_cache_';
@@ -119,24 +107,6 @@ const EquityCurveDashboard = () => {
     setOrder(isAsc ? 'desc' : 'asc');
     setOrderBy(property);
   };
-
-  const descendingComparator = (a, b, orderBy) => {
-    if (b[orderBy] < a[orderBy]) {
-      return -1;
-    }
-    if (b[orderBy] > a[orderBy]) {
-      return 1;
-    }
-    return 0;
-  };
-
-  const getComparator = (order, orderBy) => {
-    return order === 'desc'
-      ? (a, b) => descendingComparator(a, b, orderBy)
-      : (a, b) => -descendingComparator(a, b, orderBy);
-  };
-
-  const sortedTrades = dashboardTrades.slice().sort(getComparator(order, orderBy));
 
   // Set initial paper/live mode once config is loaded
   useEffect(() => {
@@ -388,264 +358,35 @@ const EquityCurveDashboard = () => {
           />
         </Box>
       </Box>
+      
       <Grid container spacing={3}>
-        {/* Left Column - Performance Chart */}
+        {/* Left Column - Performance Chart and Analytics */}
         <Grid item xs={12} lg={8}>
-          <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Account Performance
-            </Typography>
-            <Box sx={{ width: '100%', height: 400 }}>
-              <Plot
-                data={accountPlotData}
-                layout={accountPlotLayout}
-                style={{ width: '100%', height: '100%' }}
-                useResizeHandler={true}
-                config={{ responsive: true, displaylogo: false }}
-              />
-            </Box>
-          </Paper>
-
-          <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Performance Analytics
-            </Typography>
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Overall Trade Statistics
-              </Typography>
-              <Grid container spacing={1}>
-                <Grid item xs={6} sm={4}><Typography variant="body2">Total Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.totalTrades}</Typography></Grid>
-                <Grid item xs={6} sm={4}><Typography variant="body2">Winning Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>{dashboardStats?.winningTrades} ({dashboardStats?.winRate?.toFixed(1)}%)</Typography></Grid>
-                <Grid item xs={6} sm={4}><Typography variant="body2">Losing Trades:</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats?.losingTrades} ({(100 - (dashboardStats?.winRate || 0))?.toFixed(1)}%)</Typography></Grid>
-                <Grid item xs={6} sm={4}><Typography variant="body2">Avg. Win (%):</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>N/A</Typography></Grid>
-                <Grid item xs={6} sm={4}><Typography variant="body2">Avg. Loss (%):</Typography></Grid>
-                <Grid item xs={6} sm={8}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>N/A</Typography></Grid>
-              </Grid>
-            </Box>
-          </Paper>
+          <AccountPerformanceChart 
+            plotData={accountPlotData} 
+            plotLayout={accountPlotLayout} 
+          />
+          <PerformanceAnalytics stats={dashboardStats} />
         </Grid>
 
         {/* Right Column - Stats and Controls */}
         <Grid item xs={12} lg={4}>
-          {/* Performance Stats Cards */}
-          <Grid container spacing={2} sx={{ mb: 3 }}>
-            <Grid item xs={12} sm={6} lg={12}>
-              <Card>
-                <CardContent sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <MonetizationOnIcon sx={{ color: theme.palette.primary.main, mr: 1 }} />
-                    <Typography variant="subtitle2">Total Return</Typography>
-                  </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold', color: dashboardStats?.totalReturn >= 0 ? theme.palette.success.main : theme.palette.error.main }}>
-                    {dashboardStats?.totalReturn >= 0 ? '+' : ''}{dashboardStats?.totalReturn?.toFixed(2)}%
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    ${dashboardStats?.initialCapital?.toFixed(2)} → ${dashboardStats?.finalEquity?.toFixed(2)}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} lg={12}>
-              <Card>
-                <CardContent sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <TrendingUpIcon sx={{ color: theme.palette.primary.main, mr: 1 }} />
-                    <Typography variant="subtitle2">Win Rate</Typography>
-                  </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {dashboardStats?.winRate?.toFixed(2)}%
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {dashboardStats?.winningTrades} / {dashboardStats?.totalTrades} trades
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} lg={12}>
-              <Card>
-                <CardContent sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <TrendingDownIcon sx={{ color: theme.palette.primary.main, mr: 1 }} />
-                    <Typography variant="subtitle2">Max Drawdown</Typography>
-                  </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>
-                    -{dashboardStats?.maxDrawdown?.toFixed(2)}%
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Profit Factor: {dashboardStats?.profitFactor}
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-            <Grid item xs={12} sm={6} lg={12}>
-              <Card>
-                <CardContent sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                    <AssessmentIcon sx={{ color: theme.palette.primary.main, mr: 1 }} />
-                    <Typography variant="subtitle2">Sharpe Ratio</Typography>
-                  </Box>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {dashboardStats?.sharpeRatio}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Avg Win: N/A | Avg Loss: N/A
-                  </Typography>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-
-          {/* Account Overview */}
-          <Paper sx={{ p: 2, borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-            <Box>
-              <Typography variant="h6">
-                Deployed Strategies
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {isPaperMode ? "Paper Trading Performance" : "Live Trading Performance"}
-              </Typography>
-            </Box>
-          </Paper>
-
-          {/* Portfolio Snapshot */}
-          <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
-            <Typography variant="h6" sx={{ mb: 2 }}>
-              Portfolio Snapshot
-            </Typography>
-            <Box sx={{
-              p: 2, borderRadius: 1,
-              bgcolor: dashboardStats?.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.1)' : 'rgba(211, 47, 47, 0.1)',
-              border: 1, borderColor: dashboardStats?.totalReturn >= 0 ? 'rgba(46, 125, 50, 0.3)' : 'rgba(211, 47, 47, 0.3)'
-            }}>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Initial Portfolio Value (approx.):</strong> ${dashboardStats?.initialCapital?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Current Portfolio Value:</strong> ${dashboardStats?.finalEquity?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}><strong>Absolute Gain/Loss:</strong> ${(dashboardStats?.finalEquity - dashboardStats?.initialCapital)?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 'bold' }}><strong>Total Return:</strong> {dashboardStats?.totalReturn >= 0 ? '+' : ''}{dashboardStats?.totalReturn?.toFixed(2)}%</Typography>
-            </Box>
-          </Paper>
-
-          {/* Key Risk Metrics */}
-          <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2 }}>
-              Key Risk Metrics
-            </Typography>
-            <Grid container spacing={1}>
-              <Grid item xs={6}><Typography variant="body2">Max Drawdown:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>{dashboardStats?.maxDrawdown?.toFixed(2)}%</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2">Sharpe Ratio:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.sharpeRatio}</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2">Profit Factor:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.profitFactor}</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2">Win Rate:</Typography></Grid>
-              <Grid item xs={6}><Typography variant="body2" sx={{ fontWeight: 'bold' }}>{dashboardStats?.winRate?.toFixed(1)}%</Typography></Grid>
-            </Grid>
-          </Paper>
+          <DashboardStatsCards stats={dashboardStats} />
+          <DeployedStrategies isPaperMode={isPaperMode} />
+          <PortfolioSnapshot stats={dashboardStats} />
+          <KeyRiskMetrics stats={dashboardStats} />
         </Grid>
 
         {/* Bottom Row - Recent Activity and Watchlist */}
         <Grid item xs={12}>
           <Grid container spacing={3}>
             <Grid item xs={12} lg={6}>
-              <Paper sx={{ p: 3, borderRadius: 2, height: '500px', display: 'flex', flexDirection: 'column' }}>
-                <Typography variant="h6" gutterBottom>
-                  Recent Account Activity
-                </Typography>
-                <TableContainer sx={{ flexGrow: 1, maxHeight: 'none' }}>
-                  <Table stickyHeader size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'symbol'}
-                            direction={orderBy === 'symbol' ? order : 'asc'}
-                            onClick={() => handleRequestSort('symbol')}
-                          >
-                            Symbol
-                          </TableSortLabel>
-                        </TableCell>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'side'}
-                            direction={orderBy === 'side' ? order : 'asc'}
-                            onClick={() => handleRequestSort('side')}
-                          >
-                            Side
-                          </TableSortLabel>
-                        </TableCell>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'entryDate'}
-                            direction={orderBy === 'entryDate' ? order : 'asc'}
-                            onClick={() => handleRequestSort('entryDate')}
-                          >
-                            Date
-                          </TableSortLabel>
-                        </TableCell>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'entryPrice'}
-                            direction={orderBy === 'entryPrice' ? order : 'asc'}
-                            onClick={() => handleRequestSort('entryPrice')}
-                          >
-                            Price
-                          </TableSortLabel>
-                        </TableCell>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'shares'}
-                            direction={orderBy === 'shares' ? order : 'asc'}
-                            onClick={() => handleRequestSort('shares')}
-                          >
-                            Shares
-                          </TableSortLabel>
-                        </TableCell>
-                        <TableCell>
-                          <TableSortLabel
-                            active={orderBy === 'pnl'}
-                            direction={orderBy === 'pnl' ? order : 'asc'}
-                            onClick={() => handleRequestSort('pnl')}
-                          >
-                            Net P&L ($)
-                          </TableSortLabel>
-                        </TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {sortedTrades.slice(0, 50).map((trade) => (
-                        <TableRow
-                          key={trade.id}
-                          sx={{
-                            '&:nth-of-type(odd)': { bgcolor: theme.palette.action.hover },
-                            bgcolor: trade.pnl > 0 ? 'rgba(46, 125, 50, 0.04)' : 'rgba(211, 47, 47, 0.04)'
-                          }}
-                        >
-                          <TableCell>
-                            <Chip label={trade.symbol} size="small" sx={{ bgcolor: theme.palette.primary.light, color: theme.palette.primary.contrastText, fontSize: '0.75rem', height: 20 }} />
-                          </TableCell>
-                          <TableCell>
-                            <Typography variant="body2" sx={{ color: trade.side === 'buy' ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
-                              {trade.side.toUpperCase()}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>{trade.entryDate.toLocaleDateString()}</TableCell>
-                          <TableCell>${trade.entryPrice.toFixed(2)}</TableCell>
-                          <TableCell>{trade.shares}</TableCell>
-                          <TableCell>
-                            <Typography variant="body2" sx={{ color: trade.pnl > 0 ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
-                              {trade.pnl > 0 ? '+' : ''}{trade.pnl.toFixed(2)}
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Paper>
+              <RecentActivityTable 
+                trades={dashboardTrades}
+                orderBy={orderBy}
+                order={order}
+                handleRequestSort={handleRequestSort}
+              />
             </Grid>
 
             {/* Watchlist in bottom right */}

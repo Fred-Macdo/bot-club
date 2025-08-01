@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from .data_providers import DataProviderFactory, BaseDataProvider
+from .data_providers import DataProviderFactory, BaseDataProvider, TIMEFRAME_MAPPINGS
 from ..utils.date_utils import DateUtils
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,11 @@ class DataManager:
                     try:
                         from models.user_config import ConfigEncryption
                         decrypted_secret = ConfigEncryption.decrypt_value(secret_key)
+                        logger.info(f"DEBUG DATA MANAGER: Decrypted Alpaca secret key: {decrypted_secret}")
                     except Exception as e:
                         logger.warning(f"Could not decrypt secret key, using as-is: {e}")
                         decrypted_secret = secret_key
-                    
+                        
                     self.data_provider = DataProviderFactory.get_provider(
                         'alpaca',
                         api_key=api_key,
@@ -71,6 +72,7 @@ class DataManager:
                     try:
                         from models.user_config import ConfigEncryption
                         decrypted_api_key = ConfigEncryption.decrypt_value(api_key)
+                        logger.info(f"DEBUG DATA MANAGER: Decrypted Polygon API key: {decrypted_api_key}")
                     except Exception as e:
                         logger.warning(f"Could not decrypt Polygon API key, using as-is: {e}")
                         decrypted_api_key = api_key
@@ -89,7 +91,7 @@ class DataManager:
             logger.error(f"Error initializing data provider: {e}, falling back to Yahoo Finance")
             self.data_provider = DataProviderFactory.get_provider('yahoo')
     
-    async def fetch_historical_data(self, symbols: List[str], start_date: str, end_date: str, timeframe: str) -> pl.DataFrame:
+    async def fetch_historical_data(self, symbols: List[str], start_date: str, end_date: str, timeframe: str, data_provider: str) -> pl.DataFrame:
         """Fetch historical data for symbols using the initialized provider"""
         cache_key = f"{'-'.join(symbols)}_{start_date}_{end_date}_{timeframe}_{self.data_provider.get_provider_name()}"
         
@@ -110,7 +112,8 @@ class DataManager:
                         symbol=symbol,
                         start_date=start_dt,
                         end_date=end_dt,
-                        timeframe=timeframe
+                        timeframe=timeframe,
+                        data_provider=data_provider
                     )
                     
                     # Fix: Check if Polars DataFrame is empty using height
@@ -142,6 +145,141 @@ class DataManager:
             logger.error(f"Error fetching data: {e}")
             raise
     
+    async def fetch_data(self, symbols: List[str], timeframe: str, limit: int, data_provider: str) -> pl.DataFrame:
+        """
+        Fetches the latest market data for a set of symbols, up to a specified limit.
+
+        This function calculates a suitable start date to ensure enough data is retrieved
+        to satisfy the limit, accounting for non-trading days.
+        """
+        logger.info(f"Fetching latest {limit} data points for {symbols} with timeframe {timeframe} using {data_provider}")
+
+        end_date = datetime.now()
+        
+        # Get the timeframe category and calculate lookback period
+        days_to_look_back = self._calculate_lookback_days(timeframe, limit)
+
+        start_date = end_date - timedelta(days=max(1, days_to_look_back))
+        
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
+
+        symbols = [symbol.upper() for symbol in symbols]
+
+        try:
+            historical_data = await self.fetch_historical_data(
+                symbols=symbols,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                timeframe=timeframe,
+                data_provider=data_provider
+            )
+
+            if historical_data.height == 0:
+                return historical_data
+
+            # Ensure we only return the last `limit` data points per symbol
+            return historical_data.group_by('symbol', maintain_order=True).tail(limit)
+
+        except Exception as e:
+            logger.error(f"Failed to fetch latest market data: {e}")
+            # Return an empty DataFrame on failure to prevent crashes downstream
+            return pl.DataFrame()
+
+    def _calculate_lookback_days(self, timeframe: str, limit: int) -> int:
+        """
+        Calculate the number of days to look back based on timeframe and limit.
+        Uses the TIMEFRAME_MAPPINGS to categorize timeframes properly.
+        """
+        from .data_providers import TIMEFRAME_MAPPINGS
+        
+        # Normalize timeframe to match our mappings
+        normalized_timeframe = self._normalize_timeframe(timeframe)
+        
+        if normalized_timeframe not in TIMEFRAME_MAPPINGS:
+            logger.warning(f"Unknown timeframe format: {timeframe}. Using daily assumption for lookback calculation.")
+            return int(limit * 1.8)  # Default assumption: ~7 trading days in 10 calendar days
+        
+        # Determine timeframe category based on the normalized timeframe
+        if normalized_timeframe in ['1M', '2M', '5M', '15M', '30M']:
+            # Minute-based timeframes
+            minutes = self._extract_minutes_from_timeframe(normalized_timeframe)
+            # Assume 6.5 trading hours per day (390 minutes)
+            trading_days_needed = (limit * minutes) / 390
+            # Add buffer for weekends, holidays, and market closures
+            return int(trading_days_needed * 2.5) + 5
+            
+        elif normalized_timeframe in ['60M', '1H']:
+            # Hour-based timeframes
+            hours = 1  # Both 60M and 1H represent 1 hour
+            # Assume 6.5 trading hours per day
+            trading_days_needed = (limit * hours) / 6.5
+            return int(trading_days_needed * 2.5) + 5
+            
+        elif normalized_timeframe in ['1d', '1D']:
+            # Daily timeframes
+            return int(limit * 1.8)  # ~7 trading days in 10 calendar days
+            
+        elif normalized_timeframe in ['1wk', '1w', '1W']:
+            # Weekly timeframes
+            return limit * 10  # Assume ~10 calendar days per trading week
+            
+        elif normalized_timeframe in ['1mo', '3mo']:
+            # Monthly timeframes
+            return limit * 35  # Assume ~35 days per month
+            
+        else:
+            # Fallback for any other timeframes
+            logger.warning(f"Unhandled timeframe category for: {timeframe}. Using daily assumption.")
+            return int(limit * 1.8)
+
+    def _normalize_timeframe(self, timeframe: str) -> str:
+        """
+        Normalize various timeframe formats to match TIMEFRAME_MAPPINGS keys.
+        """
+        # Handle common variations
+        timeframe_upper = timeframe.upper()
+        
+        # Map common variations to our standard format
+        variations = {
+            '1MIN': '1M',
+            '5MIN': '5M', 
+            '15MIN': '15M',
+            '30MIN': '30M',
+            '60MIN': '60M',
+            '1HOUR': '1H',
+            '1DAY': '1D',
+            '1WEEK': '1W',
+            '1MONTH': '1mo',
+            # Add more variations as needed
+        }
+        
+        if timeframe_upper in variations:
+            return variations[timeframe_upper]
+        
+        # If it's already in our mapping, return as-is
+        if timeframe in TIMEFRAME_MAPPINGS or timeframe_upper in TIMEFRAME_MAPPINGS:
+            return timeframe if timeframe in TIMEFRAME_MAPPINGS else timeframe_upper
+        
+        # Try lowercase version
+        timeframe_lower = timeframe.lower()
+        if timeframe_lower in TIMEFRAME_MAPPINGS:
+            return timeframe_lower
+            
+        return timeframe  # Return original if no mapping found
+
+    def _extract_minutes_from_timeframe(self, timeframe: str) -> int:
+        """Extract the number of minutes from minute-based timeframes."""
+        minute_mappings = {
+            '1M': 1,
+            '2M': 2,
+            '5M': 5,
+            '15M': 15,
+            '30M': 30,
+            '60M': 60
+        }
+        return minute_mappings.get(timeframe, 1)
+
     def _convert_to_datetime(self, date_input) -> datetime:
         """Convert various date formats to datetime"""
         if isinstance(date_input, datetime):

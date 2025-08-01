@@ -27,10 +27,16 @@ import {
   Stop as StopIcon,
   Assessment as AssessmentIcon
 } from '@mui/icons-material';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import Plot from 'react-plotly.js';
 import { useStrategy } from '../../context/StrategyContext';
-import { fetchDefaultStrategies } from '../../api/Client';
+import {
+  fetchDefaultStrategies,
+  deployStrategy,
+  stopStrategy,
+} from '../../api/Client';
+import useTradingSocket from '../../hooks/useTradingSocket';
 
 const transformDefaultStrategies = (backendStrategies) => {
   return backendStrategies.map((strategy, index) => {
@@ -81,57 +87,57 @@ const transformDefaultStrategies = (backendStrategies) => {
 
 const PaperTradingPage = () => {
   const theme = useTheme();
-  const { strategies: userStrategies } = useStrategy();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  
+  // Get everything we need from StrategyContext
+  const { 
+    strategies, 
+    defaultStrategies, 
+    loading: strategiesLoading, 
+    error: strategiesError,
+    refreshStrategies 
+  } = useStrategy();
   
   // State for strategy selection and deployment
   const [selectedStrategy, setSelectedStrategy] = useState(null);
   const [dataProvider, setDataProvider] = useState('alpaca');
-  const [defaultStrategies, setDefaultStrategies] = useState([]);
   const [isDeployed, setIsDeployed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [defaultStrategiesLoading, setDefaultStrategiesLoading] = useState(true);
-  const [defaultStrategiesError, setDefaultStrategiesError] = useState(null);
   
+  const handleDataProviderChange = (event) => {
+    setDataProvider(event.target.value);
+  };
+  
+  // State from our new WebSocket hook
+  const { logs, status: socketStatus, error: socketError } = useTradingSocket(selectedStrategy?.id);
+
   // State for trading data
   const [pnlData, setPnlData] = useState([]);
   const [trades, setTrades] = useState([]);
-  const [logs, setLogs] = useState([]);
   const [currentPnL, setCurrentPnL] = useState(0);
-  
-  // Mock data for development
+
+  // Handle pre-selected strategy from URL parameters
   useEffect(() => {
-    const loadDefaultStrategies = async () => {
+    const preSelectedStrategyData = searchParams.get('strategyData');
+    if (preSelectedStrategyData) {
       try {
-        setDefaultStrategiesLoading(true);
-        setDefaultStrategiesError(null);
-        const result = await fetchDefaultStrategies();
-          if (result.success) {
-          // Transform backend data to match frontend format
-          const transformedStrategies = transformDefaultStrategies(result.strategies);
-          setDefaultStrategies(transformedStrategies);
-        } else {
-          setDefaultStrategiesError(result.error);
-        }
+        const strategyData = JSON.parse(preSelectedStrategyData);
+        setSelectedStrategy(strategyData);
+        console.log('Pre-selected strategy loaded:', strategyData);
       } catch (error) {
-        console.error('Error loading default strategies:', error);
-        setDefaultStrategiesError('Failed to load default strategies');
-      } finally {
-        setDefaultStrategiesLoading(false);
+        console.error('Error parsing pre-selected strategy data:', error);
       }
-    };
+    }
+  }, [searchParams]);
 
-    loadDefaultStrategies();
-
-    // Mock initial logs
-    setLogs([
-      { timestamp: new Date(), level: 'INFO', message: 'Paper trading system initialized' },
-      { timestamp: new Date(Date.now() - 60000), level: 'INFO', message: 'Market data connection established' }
-    ]);
-  }, []);
-
-  // Combine default and user strategies
+  // Combine and format all strategies
   const allStrategies = useMemo(() => {
-    const userStrategiesFormatted = userStrategies.map(strategy => ({
+    // Transform default strategies
+    const transformedDefaultStrategies = transformDefaultStrategies(defaultStrategies);
+    
+    // Format user strategies
+    const userStrategiesFormatted = strategies.map(strategy => ({
       id: strategy.id,
       name: strategy.name,
       description: strategy.description || 'No description provided',
@@ -149,36 +155,10 @@ const PaperTradingPage = () => {
       createdAt: strategy.created_at
     }));
 
-    return [...defaultStrategies, ...userStrategiesFormatted];
-  }, [userStrategies, defaultStrategies]);
+    return [...transformedDefaultStrategies, ...userStrategiesFormatted];
+  }, [strategies, defaultStrategies]);
 
-  // Mock real-time updates when deployed
-  useEffect(() => {
-    if (!isDeployed) return;
-    
-    const interval = setInterval(() => {
-      const newPnL = currentPnL + (Math.random() - 0.5) * 100;
-      setCurrentPnL(newPnL);
-      setPnlData(prev => [...prev, { timestamp: new Date(), value: newPnL }].slice(-100));
-      
-      const logMessages = [
-        'Checking entry conditions for GOOGL (Paper)',
-        'Market data updated (Paper)',
-        'Paper order executed',
-        'Signal generated for AMZN (Paper)'
-      ];
-      
-      if (Math.random() > 0.7) {
-        setLogs(prev => [{
-          timestamp: new Date(),
-          level: Math.random() > 0.8 ? 'WARNING' : 'INFO',
-          message: logMessages[Math.floor(Math.random() * logMessages.length)]
-        }, ...prev].slice(0, 50));
-      }
-    }, 2000);
-    
-    return () => clearInterval(interval);
-  }, [isDeployed, currentPnL]);
+
 
   const handleDeployStrategy = async () => {
     if (!selectedStrategy) {
@@ -189,48 +169,48 @@ const PaperTradingPage = () => {
     setIsLoading(true);
     
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
       setIsDeployed(true);
-      setLogs(prev => [{
-        timestamp: new Date(),
-        level: 'INFO',
-        message: `Paper strategy deployed: ${selectedStrategy?.name}`
-      }, ...prev]);
-      
-      // Reset data on new deployment
-      setPnlData([{ timestamp: new Date(), value: 0 }]);
-      setCurrentPnL(0);
-      setTrades([]);
+      const result = await deployStrategy(selectedStrategy.id, 'paper', dataProvider);
+      if (!result.success) {
+        console.error("Deployment failed:", result.error);
+        alert(`Deployment failed: ${result.error}`);
+      }
       
     } catch (error) {
       console.error('Deployment error:', error);
+      alert(`Deployment failed: ${error.message}`);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleStopStrategy = async () => {
+    if (!selectedStrategy) {
+      alert('No strategy is currently selected to be stopped.');
+      return;
+    }
+
     setIsLoading(true);
-    
+
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      setIsDeployed(false);
-      setLogs(prev => [{
-        timestamp: new Date(),
-        level: 'INFO',
-        message: `Paper strategy stopped: ${selectedStrategy?.name}`
-      }, ...prev]);
+      const result = await stopStrategy(selectedStrategy.id);
+
+      if (result.success) {
+        setIsDeployed(false);   
+        console.log('Stop command sent successfully.');
+      } else {
+        console.error('Failed to stop strategy:', result.error);
+        alert(`Failed to stop strategy: ${result.error}`);
+      }
     } catch (error) {
       console.error('Stopping error:', error);
+      alert(
+        `An unexpected error occurred while stopping the strategy: ${error.message}`
+      );
     } finally {
       setIsLoading(false);
     }
   };
-
-  const mockTrades = [
-    { id: 1, symbol: 'GOOGL', side: 'BUY', quantity: 10, entryPrice: 140.50, exitPrice: null, entryTime: new Date(Date.now() - 3600000), exitTime: null, pnl: 45.10, status: 'OPEN' },
-    { id: 2, symbol: 'AMZN', side: 'SELL', quantity: 20, entryPrice: 135.10, exitPrice: 138.00, entryTime: new Date(Date.now() - 7200000), exitTime: new Date(Date.now() - 1800000), pnl: -58.00, status: 'CLOSED' }
-  ];
 
   const tradeColumns = [
     { field: 'id', headerName: 'ID', width: 70 },
@@ -255,6 +235,13 @@ const PaperTradingPage = () => {
         Paper Trading
       </Typography>
 
+      {/* Show alert if strategy was pre-selected */}
+      {selectedStrategy && searchParams.get('strategyData') && (
+        <Alert severity="success" sx={{ mb: 3 }}>
+          Strategy "<strong>{selectedStrategy.name}</strong>" has been pre-loaded from the Strategy Library and is ready to deploy!
+        </Alert>
+      )}
+
       <Accordion defaultExpanded sx={{ mb: 3 }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
@@ -274,12 +261,29 @@ const PaperTradingPage = () => {
                 }}
                 disabled={isDeployed}
                 renderInput={(params) => <TextField {...params} label="Select Strategy" />}
+                renderOption={(props, option) => (
+                  <li {...props}>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                        {option.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {option.category} • {option.type === 'user' ? 'Custom' : 'Default'}
+                      </Typography>
+                    </Box>
+                  </li>
+                )}
               />
             </Box>
             <Box sx={{ flex: '1 1 150px', minWidth: '120px' }}>
               <FormControl fullWidth>
                 <InputLabel>Data Provider</InputLabel>
-                <Select value={dataProvider} onChange={(e) => setDataProvider(e.target.value)} label="Data Provider" disabled={isDeployed}>
+                <Select
+                  value={dataProvider}
+                  onChange={handleDataProviderChange}
+                  label="Data Provider"
+                  disabled={isDeployed}
+                >
                   <MenuItem value="alpaca">Alpaca</MenuItem>
                   <MenuItem value="polygon">Polygon</MenuItem>
                 </Select>
@@ -315,9 +319,36 @@ const PaperTradingPage = () => {
               </Box>
             )}
           </Box>
+          
+          {/* Deployment Status */}
+          {selectedStrategy && (
+            <Box sx={{ mt: 2 }}>
+              {socketError && (
+                <Alert severity="error" sx={{ mb: 1 }}>
+                  <strong>Connection Error:</strong> {socketError}
+                </Alert>
+              )}
+              {!socketError && socketStatus === 'connecting' && (
+                <Alert severity="info" icon={<CircularProgress size={20} />} sx={{ mb: 1 }}>
+                  Connecting to trading service...
+                </Alert>
+              )}
+              {!socketError && (isDeployed || socketStatus === 'connected') && (
+                <Alert severity="success" sx={{ mb: 1 }}>
+                  <strong>Strategy "{selectedStrategy.name}" is active.</strong> Real-time logs and performance data are being streamed.
+                </Alert>
+              )}
+              {!socketError && socketStatus === 'disconnected' && isDeployed && (
+                <Alert severity="warning" sx={{ mb: 1 }}>
+                  Connection lost. Attempting to reconnect...
+                </Alert>
+              )}
+            </Box>
+          )}
         </AccordionDetails>
       </Accordion>
 
+     
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} lg={6}>
           <Paper sx={{ p: 2, height: 400 }}>
@@ -329,13 +360,19 @@ const PaperTradingPage = () => {
           <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom>Trading Logs</Typography>
             <Box sx={{ flexGrow: 1, overflow: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1, backgroundColor: theme.palette.background.default }}>
+              {socketError && <Alert severity="error">{socketError}</Alert>}
               {logs.map((log, index) => (
                 <Box key={index} sx={{ mb: 0.5, fontSize: '0.875rem', fontFamily: 'monospace' }}>
-                  <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{log.timestamp.toLocaleTimeString()}</Typography>
+                  <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{new Date(log.timestamp).toLocaleTimeString()}</Typography>
                   <Typography component="span" variant="body2" sx={{ color: log.level === 'WARNING' ? theme.palette.warning.main : theme.palette.info.main, mx: 1 }}>[{log.level}]</Typography>
                   <Typography component="span" variant="body2">{log.message}</Typography>
                 </Box>
               ))}
+              {logs.length === 0 && !socketError && (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.palette.text.secondary }}>
+                  Waiting for logs...
+                </Box>
+              )}
             </Box>
           </Paper>
         </Grid>
@@ -344,7 +381,7 @@ const PaperTradingPage = () => {
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>Trade History</Typography>
         <Box sx={{ height: 400, width: '100%' }}>
-          <DataGrid rows={isDeployed ? mockTrades : []} columns={tradeColumns} pageSize={5} rowsPerPageOptions={[5]} disableSelectionOnClick sx={{ '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } }} />
+          <DataGrid rows={isDeployed ? trades : []} columns={tradeColumns} pageSize={5} rowsPerPageOptions={[5]} disableSelectionOnClick sx={{ '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } }} />
         </Box>
       </Paper>
     </Container>

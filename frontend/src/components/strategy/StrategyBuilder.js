@@ -16,6 +16,10 @@ const StrategyCenterPage = () => {
   const theme = useTheme();
   const [activeTab, setActiveTab] = useState(0); // 0: Library, 1: Builder
 
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -28,7 +32,7 @@ const StrategyCenterPage = () => {
       <Paper sx={{ borderRadius: 2, mb: 3 }}>
         <Tabs 
           value={activeTab} 
-          onChange={(event, newValue) => setActiveTab(newValue)}
+          onChange={handleTabChange}
           sx={{ 
             borderBottom: 1, 
             borderColor: 'divider',

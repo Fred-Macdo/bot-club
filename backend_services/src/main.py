@@ -3,6 +3,7 @@ import logging
 from aiohttp import web
 import json
 from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 
 # Local imports
 from config import (
@@ -10,7 +11,10 @@ from config import (
     SERVICE_PORT
 )
 from services.backtest.backtest_service import BacktestService
-from services.backtest.backtest_engine import TradingMode
+from services.trading.trading_service import TradingService
+from services.utils.enums import TradingMode
+from services.utils.live_strategy_executor import LiveStrategyExecutor
+from services.utils.websocket_manager import websocket_manager
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +37,7 @@ class BackendService:
         self.db_client = None
         self.db = None
         self.backtest_service = None
+        self.trading_service = None
         self.setup_routes()
 
     def setup_routes(self):
@@ -49,6 +54,9 @@ class BackendService:
         self.app.router.add_post('/trading/stop', self.stop_trading)
         self.app.router.add_get('/trading/status/{strategy_id}', self.get_trading_status)
         
+        # WebSocket endpoint for logs
+        self.app.router.add_get('/ws/trading/{strategy_id}', self.websocket_handler)
+        
         # Setup middleware
         self.app.middlewares.append(self.error_middleware)
 
@@ -63,12 +71,39 @@ class BackendService:
                 status=500
             )
 
+    async def websocket_handler(self, request):
+        """Handles WebSocket connections for log streaming."""
+        strategy_id = request.match_info['strategy_id']
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        await websocket_manager.add_connection(strategy_id, ws)
+        logger.info(f"WebSocket connection established for strategy: {strategy_id}")
+        
+        try:
+            # Send current status upon connection
+            status = self.trading_service.get_trading_session_status(strategy_id)
+            await ws.send_json({"type": "status", "data": status})
+
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    if msg.data == 'close':
+                        await ws.close()
+                elif msg.type == web.WSMsgType.ERROR:
+                    logger.error(f'WebSocket connection closed with exception {ws.exception()}')
+        finally:
+            websocket_manager.remove_connection(strategy_id, ws)
+            logger.info(f"WebSocket connection closed for strategy: {strategy_id}")
+
+        return ws
+        
     async def health_check(self, request):
         return web.json_response({
             "status": "healthy",
             "services": {
                 "db": "connected" if self.db_client else "disconnected",
-                "backtest": "running" if self.backtest_service else "stopped"
+                "backtest": "running" if self.backtest_service else "stopped",
+                "trading": "running" if self.trading_service else "stopped"
             }
         })
 
@@ -102,40 +137,22 @@ class BackendService:
             return web.json_response({"error": str(e)}, status=500)
 
     async def run_trading(self, request):
-        """Start trading (backtest, paper, or live)"""
+        """Start trading (paper or live)"""
         try:
             data = await request.json()
             logger.info(f"Received trading request: {data}")
             
-            # Validate required fields
             required_fields = ['strategy_id', 'mode', 'user_id']
             for field in required_fields:
                 if field not in data:
                     return web.json_response({"error": f"Missing required field: {field}"}, status=400)
-            
-            strategy_id = data['strategy_id']
-            mode = TradingMode(data['mode'])
-            user_id = data['user_id']
-            
-            if mode == TradingMode.BACKTEST:
-                if 'backtest_params' not in data:
-                    return web.json_response({"error": "Backtest parameters required"}, status=400)
-                result = await self.backtest_service.run_trading(
-                    strategy_id=strategy_id,
-                    mode=mode,
-                    user_id=user_id,
-                    backtest_params=data['backtest_params']
-                )
-            else:
-                if 'alpaca_config' not in data:
-                    return web.json_response({"error": "Alpaca configuration required"}, status=400)
-                result = await self.backtest_service.run_trading(
-                    strategy_id=strategy_id,
-                    mode=mode,
-                    user_id=user_id,
-                    alpaca_config=data['alpaca_config']
-                )
-            
+            logger.info(f"DEBUG TRADING: Starting trading session for strategy: {data['strategy_id']}")
+            result = await self.trading_service.start_trading_session(
+                strategy_id=data['strategy_id'],
+                user_id=data['user_id'],
+                mode=TradingMode(data['mode']),
+                data_provider=data['data_provider']
+            )
             return web.json_response(result)
             
         except Exception as e:
@@ -151,7 +168,7 @@ class BackendService:
             if not strategy_id:
                 return web.json_response({"error": "Strategy ID required"}, status=400)
             
-            result = await self.backtest_service.stop_trading(strategy_id)
+            result = await self.trading_service.stop_trading_session(strategy_id)
             return web.json_response(result)
             
         except Exception as e:
@@ -162,7 +179,7 @@ class BackendService:
         """Get trading status"""
         try:
             strategy_id = request.match_info['strategy_id']
-            result = await self.backtest_service.get_trading_status(strategy_id)
+            result = self.trading_service.get_trading_session_status(strategy_id)
             return web.json_response(result)
             
         except Exception as e:
@@ -194,6 +211,9 @@ class BackendService:
         self.backtest_service = BacktestService(self.db)
         await self.backtest_service.initialize()
         
+        logger.info("Initializing trading service")
+        self.trading_service = TradingService(self.db)
+        
         logger.info("Backend service started successfully")
 
     async def cleanup(self):
@@ -201,6 +221,9 @@ class BackendService:
         if self.backtest_service:
             await self.backtest_service.shutdown()
         
+        if self.trading_service:
+            await self.trading_service.shutdown()
+
         if self.db_client:
             self.db_client.close()
             logger.info("Database connection closed")
