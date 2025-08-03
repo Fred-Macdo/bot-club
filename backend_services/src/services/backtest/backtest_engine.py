@@ -59,7 +59,11 @@ class BacktestEngine:
         timeframe = params.timeframe or config.get('timeframe')
         
         data = await self.data_manager.fetch_historical_data(
-            symbols, params.start_date, params.end_date, timeframe
+            symbols, 
+            params.start_date, 
+            params.end_date, 
+            timeframe, 
+            params.data_provider
         )
         
         portfolio = Portfolio(initial_capital=params.initial_capital)
