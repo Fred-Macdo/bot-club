@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,7 @@ class Position:
     entry_price: float
     entry_time: datetime
     entry_value: float
+    position_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     
     def get_days_held(self, current_time: datetime) -> int:
         return (current_time - self.entry_time).days
@@ -27,18 +29,22 @@ class Trade:
     entry_time: datetime
     exit_time: datetime
     pnl: float
+    position_id: str
     trade_type: str = "long"
-    pnl_emoji: str = "⚪"  # Add emoji field
+    pnl_emoji: str = "⚪"
     
     @property
     def pnl_pct(self) -> float:
         """Calculate P&L percentage"""
+        if self.entry_price == 0:
+            return 0.0
         return (self.exit_price - self.entry_price) / self.entry_price * 100
     
     def to_dict(self) -> Dict[str, Any]:
         return {
+            'position_id': self.position_id,
             'symbol': self.symbol,
-            'quantity': self.shares,  # Use 'quantity' to match expected format
+            'quantity': self.shares,
             'entry_price': self.entry_price,
             'exit_price': self.exit_price,
             'entry_time': self.entry_time,
@@ -46,28 +52,28 @@ class Trade:
             'pnl': self.pnl,
             'trade_type': self.trade_type,
             'pnl_emoji': self.pnl_emoji,
-            'return_pct': self.pnl_pct  # Add return percentage
+            'return_pct': self.pnl_pct
         }
 
-class  Portfolio:
+class Portfolio:
     """Portfolio tracking class"""
     
     def __init__(self, initial_capital: float):
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.positions = {}
+        self.positions: Dict[str, List[Position]] = {}
         self.equity_history = []
     
     def get_total_value(self, current_prices: Dict[str, float] = None) -> float:
         """Calculate total portfolio value using current market prices"""
         total = self.cash
-        for symbol, position in self.positions.items():
-            if current_prices and symbol in current_prices:
-                position_value = position.shares * current_prices[symbol]
-            else:
-                # Fallback to entry price if current price not available
-                position_value = position.shares * position.entry_price
-            total += position_value
+        for symbol, position_list in self.positions.items():
+            for position in position_list:
+                if current_prices and symbol in current_prices:
+                    position_value = position.shares * current_prices[symbol]
+                else:
+                    position_value = position.shares * position.entry_price
+                total += position_value
         return total
     
     @property
@@ -75,7 +81,7 @@ class  Portfolio:
         """Backward compatibility - uses entry prices"""
         return self.get_total_value()
     
-    def update_equity_history(self, timestamp: datetime, current_prices: Dict[str, float] = None, ):
+    def update_equity_history(self, timestamp: datetime, current_prices: Dict[str, float] = None):
         """Update equity history with current portfolio state"""
         total_portfolio_value = self.get_total_value(current_prices)
         positions_value = total_portfolio_value - self.cash
@@ -88,15 +94,20 @@ class  Portfolio:
         }
         
         self.equity_history.append(equity_point)
-        
-        logger.debug(f"Equity update: ${total_portfolio_value:.2f} (Cash: ${self.cash:.2f}, Positions: ${positions_value:.2f}) - or {'update'}")
+        logger.debug(f"Equity update: ${total_portfolio_value:.2f} (Cash: ${self.cash:.2f}, Positions: ${positions_value:.2f})")
     
     def add_position(self, position: Position):
-        self.positions[position.symbol] = position
+        """Adds a position to the portfolio."""
+        if position.symbol not in self.positions:
+            self.positions[position.symbol] = []
+        self.positions[position.symbol].append(position)
     
-    def remove_position(self, symbol: str):
+    def remove_position(self, symbol: str, position_id: str):
+        """Removes a specific position from the portfolio."""
         if symbol in self.positions:
-            del self.positions[symbol]
+            self.positions[symbol] = [p for p in self.positions[symbol] if p.position_id != position_id]
+            if not self.positions[symbol]:
+                del self.positions[symbol]
     
     def open_position(self, symbol: str, row: Dict[str, Any], timestamp: datetime, risk_mgmt: Dict) -> Optional[Position]:
         """Open a new position"""
@@ -131,7 +142,7 @@ class  Portfolio:
             )
             
             self.add_position(position)
-            logger.info(f"Opened position: {symbol} {position_size} shares at ${entry_price:.2f}")
+            logger.info(f"Opened position ({position.position_id[:8]}): {symbol} {position_size} shares at ${entry_price:.2f}")
             return position
         
         return None
@@ -142,14 +153,14 @@ class  Portfolio:
         exit_value = position.shares * exit_price
         
         self.cash += exit_value
-        self.remove_position(position.symbol)
+        self.remove_position(position.symbol, position.position_id)
         
         pnl = exit_value - position.entry_value
         
-        # Add emoji based on P&L
-        pnl_emoji = "" if pnl > 0 else "" if pnl < 0 else "⚪"
+        pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
         
         trade = Trade(
+            position_id=position.position_id,
             symbol=position.symbol,
             shares=position.shares,
             entry_price=position.entry_price,
@@ -160,7 +171,7 @@ class  Portfolio:
             pnl_emoji=pnl_emoji
         )
         
-        logger.info(f"Closed position: {pnl_emoji} {position.symbol} | PnL: ${pnl:.2f} ({trade.pnl_pct:.2f}%)")
+        logger.info(f"Closed position ({position.position_id[:8]}): {pnl_emoji} {position.symbol} | PnL: ${pnl:.2f} ({trade.pnl_pct:.2f}%)")
         return trade
     
     def get_equity_curve(self) -> List[Dict[str, Any]]:

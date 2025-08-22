@@ -1,61 +1,72 @@
 # backend/src/services/data_providers.py
 from abc import ABC, abstractmethod
 import polars as pl
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Optional, Dict, Any, Tuple, Union, List
 import yfinance as yf
 import aiohttp
+from urllib.parse import urlencode
 import asyncio
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Consolidated timeframe mappings
 TIMEFRAME_MAPPINGS = {
-    # Standard input timeframes (what users can specify)
     '1M': {'yahoo': '1m', 'alpaca': '1Min', 'polygon': ('minute', 1)},
-    '2M': {'yahoo': '2m', 'alpaca': None, 'polygon': ('minute', 2)},
+    '2M': {'yahoo': '2m', 'alpaca': '2Min', 'polygon': ('minute', 2)},
     '5M': {'yahoo': '5m', 'alpaca': '5Min', 'polygon': ('minute', 5)},
     '15M': {'yahoo': '15m', 'alpaca': '15Min', 'polygon': ('minute', 15)},
     '30M': {'yahoo': '30m', 'alpaca': '30Min', 'polygon': ('minute', 30)},
     '60M': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
+    '1h': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
     '1H': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
     '1d': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
     '1D': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
-    '5D': {'yahoo': '5d', 'alpaca': None, 'polygon': ('day', 5)},
+    '5D': {'yahoo': '5d', 'alpaca': '5Day', 'polygon': ('day', 5)},
     '1wk': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
     '1w': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
     '1W': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
-    '1mo': {'yahoo': '1mo', 'alpaca': None, 'polygon': None},
-    '3mo': {'yahoo': '3mo', 'alpaca': None, 'polygon': None},
+    '1mo': {'yahoo': '1mo', 'alpaca': '1Month', 'polygon': ('month', 1)},
+    '3mo': {'yahoo': '3mo', 'alpaca': '3Month', 'polygon': ('month', 3)},
 }
 
 AVAILABLE_CRYPTO_ASSETS = ['AAVE',
-                           'AVAX',
-                           'BAT',
-                           'BCH',
-                           'BTC',
-                           'CRV',
-                           'DOGE',
-                           'DOT',
-                           'ETH',
-                           'GRT',
-                           'LINK',
-                           'LTC',
-                           'MKR',
-                           'PEPE',
-                           'SHIB',
-                           'SOL',
-                           'SUSHI',
-                           'TRUMP',
-                           'UNI',
-                           'USDC',
-                           'USDG',
-                           'USDT',
-                           'XRP',
-                           'XTZ',
-                           'YFI']
+                            'AVAX',
+                            'BAT',
+                            'BCH',
+                            'BTC',
+                            'CRV',
+                            'DOGE',
+                            'DOT',
+                            'ETH',
+                            'GRT',
+                            'LINK',
+                            'LTC',
+                            'MKR',
+                            'PEPE',
+                            'SHIB',
+                            'SOL',
+                            'SUSHI',
+                            'TRUMP',
+                            'UNI',
+                            'USDC',
+                            'USDG',
+                            'USDT',
+                            'XRP',
+                            'XTZ',
+                            'YFI']
+
+ALPACA_RESPONSE_CODES = {
+    200: "Success",
+    400: """One of the request parameters is invalid. See the returned message for details.""",
+    403: """Authentication headers are missing or invalid. 
+    Make sure you authenticate your request with a valid API key.""",
+    429: """Too many requests. You hit the rate limit. 
+    Use the X-RateLimit-... response headers to make sure you're under the rate limit.""",
+    500: """Internal server error. We recommend retrying these later. 
+    If the issue persists, please contact us on Slack or on the Community Forum."""
+}
 
 class BaseDataProvider(ABC):
     """Abstract base class for data providers"""
@@ -190,69 +201,85 @@ class AlpacaProvider(BaseDataProvider):
             Returns an empty DataFrame if no data is found or an error occurs.
         """
         async with aiohttp.ClientSession() as session:
-            timeframe_str = self.get_provider_timeframe(timeframe) or '1Day'
-            url = f"{self.base_url}/v2/stocks/bars"
+            stocks_url = f"{self.base_url}/v2/stocks/bars"
+            crypto_url = f"{self.base_url}/v1beta3/crypto/us/bars"
             
-            params = {
-                'symbols': ','.join(symbols),
-                'start': start_date.isoformat(),
-                'end': end_date.isoformat(),
-                'timeframe': timeframe_str,
-                'limit': 10000,
-                'adjustment': 'raw'
-            }
+            crypto_symbols = []
+            stocks_symbols = []
+            
+            logger.info(f"DEBUG: ALPACA_PROVIDER: Symbols: {symbols}, type: {type(symbols)}")
+
+            for symbol in symbols:
+                logger.info(f"DEBUG: Individual Symbols ALPACA_PROVIDER: Symbol: {symbol}, type: {type(symbol)}")
+                if symbol.upper() in AVAILABLE_CRYPTO_ASSETS:
+
+                    crypto_symbols = [f"{symbol}/USD" for symbol in symbols]
+                else:
+                    stocks_symbols.append(symbol)
+
+            logger.info(f"DEBUG: ALPACA_PROVIDER: Crypto symbols: {crypto_symbols}")
+            logger.info(f"DEBUG: ALPACA_PROVIDER: Stocks symbols: {stocks_symbols}")
+            
             
             all_bars = []
-            page_token = None
-            
-            while True:
-                if page_token:
-                    params['page_token'] = page_token
+            # Fetch stocks data
+            if len(stocks_symbols) > 0:
+                params = {
+                    'symbols': ','.join(stocks_symbols),
+                    'timeframe': TIMEFRAME_MAPPINGS[timeframe].get('alpaca'),
+                    'start': start_date.strftime('%Y-%m-%d'),
+                    'end': end_date.strftime('%Y-%m-%d'),
+                    'limit': 10000
+                }
                 
-                try:
-                    async with session.get(url, headers=self.headers, params=params) as response:
+                page_token = None
+                while True:
+                    async with session.get(stocks_url, headers=self.headers, params=params) as response:
                         response.raise_for_status()
 
                         if response.status == 200:
                             data = await response.json()
-                        elif response.status == 400:
-                            logger.error(f"Error fetching historical data from Alpaca: {response.body}")
-                            return pl.DataFrame()
-                        elif response.status == 403:
-                            logger.error(f"""Authentication headers are missing or invalid. 
-                                         Make sure you authenticate your request with a valid API key.""")
-                            return pl.DataFrame()
-                        elif response.status == 429:
-                            logger.error(f"""Too many requests. You hit the rate limit. 
-                                         Use the X-RateLimit-... 
-                                         response headers to make sure you're under the rate limit.""")
-                            return pl.DataFrame()
-                        elif response.status == 500:
-                            logger.error(f"""Internal server error. 
-                                         We recommend retrying these later. 
-                                         If the issue persists, please contact us 
-                                         on Slack or on the Community Forum.""")
+                            bars_data = data.get('bars')
+                            if bars_data:
+                                for symbol, symbol_bars in bars_data.items():
+                                    for bar in symbol_bars:
+                                        bar['symbol'] = symbol
+                                        all_bars.append(bar)
+                            page_token = data.get('next_page_token')
+                            if not page_token:
+                                break
+                        else:
+                            logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
                             return pl.DataFrame()
 
-                        bars_data = data.get('bars')
-                        
-                except aiohttp.ClientError as e:
-                    logger.error(f"Error fetching historical data from Alpaca: {e}")
-                    return pl.DataFrame()
+            # Fetch crypto data
+            if len(crypto_symbols) > 0:
+                params = {
+                    'symbols': ','.join(crypto_symbols),
+                    'timeframe': TIMEFRAME_MAPPINGS[timeframe].get('alpaca'),
+                    'start': start_date.strftime('%Y-%m-%d'),
+                    'end': end_date.strftime('%Y-%m-%d'),
+                    'limit': 10000
+                }
 
-                bars_data = data.get('bars')
-                if bars_data:
-                    for symbol, symbol_bars in bars_data.items():
-                        for bar in symbol_bars:
-                            bar['symbol'] = symbol
-                            all_bars.append(bar)
-                
-                page_token = data.get('next_page_token')
-                if not page_token:
-                    break
-            
-            if not all_bars:
-                return pl.DataFrame()
+                page_token = None
+                while True:
+                    async with session.get(crypto_url, headers=self.headers, params=params) as response:
+                        response.raise_for_status()
+                        if response.status == 200:
+                            data = await response.json()
+                            crypto_bars_data = data.get('bars')
+                            if crypto_bars_data:
+                                for crypto_symbol, crypto_symbol_bars in crypto_bars_data.items():
+                                    for bar in crypto_symbol_bars:
+                                        bar['symbol'] = crypto_symbol.rstrip('/USD')
+                                        all_bars.append(bar)
+                            page_token = data.get('next_page_token')
+                            if not page_token:
+                                break
+                        else:
+                            logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
+                            return pl.DataFrame()
 
             df = pl.DataFrame(all_bars)
 
@@ -272,8 +299,11 @@ class AlpacaProvider(BaseDataProvider):
             
             # Filter out columns that are not in the DataFrame
             existing_cols = [col for col in required_cols if col in df.columns]
+
+            logger.info(f"DEBUG: ALPACA_PROVIDER: Existing columns: {df.head(10)}")
             
             return df.select(existing_cols)
+        
     
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """Get current quote from Alpaca"""
@@ -295,7 +325,7 @@ class AlpacaProvider(BaseDataProvider):
                     }
                 else:
                     return {}
-                
+
     async def get_asset_list(self):
         """Get list of assets from Alpaca"""
         async with aiohttp.ClientSession() as session:
@@ -362,7 +392,7 @@ class PolygonProvider(BaseDataProvider):
         if symbol not in AVAILABLE_CRYPTO_ASSETS:
             url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{start_date}/{end_date}"
         else:
-            crypto_symbol = symbol + 'USD'
+            crypto_symbol = 'X:' + symbol + 'USD'
             url = f"{self.base_url}/v2/aggs/ticker/{crypto_symbol}/range/{multiplier}/{timespan}/{start_date}/{end_date}"
 
         params = {
@@ -388,7 +418,6 @@ class PolygonProvider(BaseDataProvider):
                     df = df.with_columns(
                         pl.from_epoch('t', time_unit='ms').dt.convert_time_zone("America/New_York").alias("t")
                     )
-
                     
                     # Rename columns
                     df = df.rename({
@@ -403,25 +432,262 @@ class PolygonProvider(BaseDataProvider):
                     return df[['t', 'open', 'high', 'low', 'close', 'volume', 'vwap']]
                 else:
                     return pl.DataFrame()
+                
+    def _create_empty_bar_record(self, symbol: str) -> Dict[str, Any]:
+        """Create an empty bar record for symbols with no data"""
+        return {
+            'symbol': symbol,
+            'timestamp': 0,
+            'open': 0.0,
+            'high': 0.0,
+            'low': 0.0,
+            'close': 0.0,
+            'volume': 0.0,
+            'vwap': 0.0,
+            'transactions': 0,
+            'bid_estimate': 0.0,
+            'ask_estimate': 0.0,
+            'last_updated_utc': datetime.now().isoformat()
+        }
     
-    async def get_quote(self, symbol: str) -> Dict[str, Any]:
-        """Get current quote from Polygon"""
+    async def get_crypto_quote(self, symbols: list[str]) -> pl.DataFrame:
+        """
+        Get crypto quotes from Polygon using the latest 1-minute bars.
+        This provides near real-time OHLCV data which is more comprehensive than quotes.
+        
+        Args:
+            symbols: List of crypto symbols (e.g., ['BTC', 'ETH', 'SOL'])
+                    Note: These should be base currency symbols, USD will be appended
+        
+        Returns:
+            pl.DataFrame with columns: [symbol, timestamp, open, high, low, close, 
+                                    volume, vwap, transactions, bid_estimate, ask_estimate]
+            Returns empty DataFrame if no data found or errors occur
+        
+        Raises:
+            ValueError: If any symbol is not in AVAILABLE_CRYPTO_ASSETS
+        """
+        # Validate all symbols first
+        for symbol in symbols:
+            if symbol not in AVAILABLE_CRYPTO_ASSETS:
+                raise ValueError(f"Symbol {symbol} is not a tradable crypto asset on Polygon")
+        
+        if not symbols:
+            logger.warning("No symbols provided to get_crypto_quote")
+            return pl.DataFrame()
+        
+        # Calculate time range for latest bars (last 2 minutes to ensure we get data)
+        end_time = datetime.now()
+        start_time = end_time - timedelta(minutes=2)
+        
+        # Format dates for API
+        from_date = start_time.strftime('%Y-%m-%d')
+        to_date = end_time.strftime('%Y-%m-%d')
+        
         async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}/v2/last/trade/{symbol}"
-            params = {'apiKey': self.api_key}
+            all_bars = []
+            
+            # Use semaphore to limit concurrent requests (respect rate limits)
+            semaphore = asyncio.Semaphore(5)
+            
+            async def fetch_symbol_bar(symbol: str):
+                async with semaphore:
+                    try:
+                        # Polygon crypto format: X:SYMBOLUSD
+                        crypto_ticker = f"X:{symbol}USD"
+                        
+                        # Get latest 1-minute bars for near real-time data
+                        url = f"{self.base_url}/v2/aggs/ticker/{crypto_ticker}/range/1/minute/{from_date}/{to_date}"
+                        params = {
+                            'apikey': self.api_key,
+                            'adjusted': 'true',
+                            'sort': 'desc',  # Get latest bars first
+                            'limit': 1       # Only need the most recent bar
+                        }
+                        
+                        async with session.get(url, params=params) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                logger.info(f"Polygon crypto bar for {symbol}: Status {response.status}")
+                                
+                                if 'results' in data and data['results']:
+                                    # Get the most recent bar (first one due to desc sort)
+                                    latest_bar = data['results'][0]
+                                    
+                                    # Parse bar data
+                                    bar_record = {
+                                        'symbol': symbol,
+                                        'timestamp': latest_bar.get('t', 0),  # Unix timestamp in ms
+                                        'open': latest_bar.get('o', 0.0),
+                                        'high': latest_bar.get('h', 0.0),
+                                        'low': latest_bar.get('l', 0.0),
+                                        'close': latest_bar.get('c', 0.0),     # This is our "current price"
+                                        'volume': latest_bar.get('v', 0.0),
+                                        'vwap': latest_bar.get('vw', 0.0),     # Volume weighted average price
+                                        'transactions': latest_bar.get('n', 0), # Number of transactions
+                                        'last_updated_utc': datetime.now().isoformat()
+                                    }
+                                    
+                                    # Estimate bid/ask from OHLC (common practice)
+                                    # Bid = slightly below close, Ask = slightly above close
+                                    close_price = bar_record['close']
+                                    if close_price > 0:
+                                        spread_estimate = close_price * 0.001  # 0.1% spread estimate
+                                        bar_record['bid_estimate'] = close_price - (spread_estimate / 2)
+                                        bar_record['ask_estimate'] = close_price + (spread_estimate / 2)
+                                    else:
+                                        bar_record['bid_estimate'] = 0.0
+                                        bar_record['ask_estimate'] = 0.0
+                                    
+                                    return bar_record
+                                
+                                else:
+                                    logger.warning(f"No bar data found for {symbol}")
+                                    return self._create_empty_bar_record(symbol)
+                            
+                            elif response.status == 401:
+                                logger.error("Polygon API authentication failed - check API key")
+                                return None
+                            
+                            elif response.status == 403:
+                                logger.error("Polygon API access forbidden - check subscription plan")
+                                return None
+                            
+                            elif response.status == 429:
+                                logger.error(f"Polygon API rate limit exceeded for {symbol}")
+                                # Return empty record rather than None to continue processing
+                                return self._create_empty_bar_record(symbol)
+                            
+                            elif response.status == 404:
+                                logger.warning(f"No data found for crypto symbol {symbol}")
+                                return self._create_empty_bar_record(symbol)
+                            
+                            else:
+                                logger.error(f"Polygon API error for {symbol}: Status {response.status}")
+                                response_text = await response.text()
+                                logger.error(f"Response: {response_text}")
+                                return self._create_empty_bar_record(symbol)
+                    
+                    except aiohttp.ClientError as e:
+                        logger.error(f"Network error fetching bar for {symbol}: {e}")
+                        return self._create_empty_bar_record(symbol)
+                    
+                    except Exception as e:
+                        logger.error(f"Unexpected error fetching bar for {symbol}: {e}")
+                        return self._create_empty_bar_record(symbol)
+            
+            # Execute all requests concurrently
+            tasks = [fetch_symbol_bar(symbol) for symbol in symbols]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Filter out None results and exceptions
+            for result in results:
+                if result is not None and not isinstance(result, Exception):
+                    all_bars.append(result)
+            
+            # Convert to Polars DataFrame
+            if not all_bars:
+                logger.warning("No crypto bars retrieved from Polygon")
+                return pl.DataFrame()
+            
+            try:
+                df = pl.DataFrame(all_bars)
+                
+                # Convert timestamp and ensure proper data types
+                df = df.with_columns([
+                    # Convert timestamp from milliseconds to datetime
+                    pl.when(pl.col("timestamp") > 0)
+                    .then(pl.from_epoch("timestamp", time_unit="ms").dt.convert_time_zone("UTC"))
+                    .otherwise(pl.lit(None).cast(pl.Datetime))
+                    .alias("timestamp"),
+                    
+                    # Ensure numeric columns are proper types
+                    pl.col("open").cast(pl.Float64),
+                    pl.col("high").cast(pl.Float64),
+                    pl.col("low").cast(pl.Float64),
+                    pl.col("close").cast(pl.Float64),
+                    pl.col("volume").cast(pl.Float64),
+                    pl.col("vwap").cast(pl.Float64),
+                    pl.col("transactions").cast(pl.Int32),
+                    pl.col("bid_estimate").cast(pl.Float64),
+                    pl.col("ask_estimate").cast(pl.Float64),
+                ])
+                
+                # Add additional calculated fields for compatibility
+                df = df.with_columns([
+                    # Mid price (same as close for bars)
+                    pl.col("close").alias("mid_price"),
+                    
+                    # Price change from open to close
+                    pl.when(pl.col("open") > 0)
+                    .then(pl.col("close") - pl.col("open"))
+                    .otherwise(0.0)
+                    .alias("price_change"),
+                    
+                    # Percentage change
+                    pl.when(pl.col("open") > 0)
+                    .then(((pl.col("close") - pl.col("open")) / pl.col("open")) * 100)
+                    .otherwise(0.0)
+                    .alias("price_change_percent"),
+                    
+                    # Trading intensity (volume per transaction)
+                    pl.when(pl.col("transactions") > 0)
+                    .then(pl.col("volume") / pl.col("transactions"))
+                    .otherwise(0.0)
+                    .alias("avg_trade_size")
+                ])
+                
+                # Select and order columns for final output
+                final_columns = [
+                    'symbol', 'timestamp', 'close', 'open', 'high', 'low', 
+                    'volume', 'vwap', 'transactions', 'bid_estimate', 'ask_estimate',
+                    'mid_price', 'price_change', 'price_change_percent', 'avg_trade_size',
+                    'last_updated_utc'
+                ]
+                
+                # Filter columns that exist in the DataFrame
+                existing_columns = [col for col in final_columns if col in df.columns]
+                
+                return df.select(existing_columns)
+                
+            except Exception as e:
+                logger.error(f"Error creating DataFrame from crypto bars: {e}")
+                return pl.DataFrame()
+
+    async def get_quote(self, symbol: str) -> Dict[str, Any]:
+        """Get current quote from Polygon using latest 1-minute bar"""
+        async with aiohttp.ClientSession() as session:
+            # Get the most recent 1-minute bar (last 2 minutes to ensure data)
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(minutes=2)).strftime('%Y-%m-%d')
+            
+            url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/1/minute/{start_date}/{end_date}"
+            params = {
+                'apikey': self.api_key,
+                'adjusted': 'true',
+                'sort': 'desc',
+                'limit': 1
+            }
             
             async with session.get(url, params=params) as response:
                 data = await response.json()
-                logger.info(f"Data Provider: Polygon Quote Response: {data}")
-                if 'results' in data:
-                    result = data['results']
+                
+                if 'results' in data and data['results']:
+                    bar = data['results'][0]  # Most recent bar
+                    close_price = bar.get('c', 0)
+                    
+                    # Simple bid/ask estimation from close price
+                    spread = close_price * 0.001  # 0.1% spread estimate
+                    bid_price = close_price - (spread / 2)
+                    ask_price = close_price + (spread / 2)
+                    
                     return {
                         'symbol': symbol,
-                        'price': result.get('p', 0),
-                        'bid': 0,  # Polygon doesn't provide bid/ask in this endpoint
-                        'ask': 0,
-                        'volume': result.get('s', 0),
-                        'timestamp': pl.to_datetime(result.get('t'), unit='ns')
+                        'price': close_price,
+                        'bid': bid_price,
+                        'ask': ask_price,
+                        'volume': bar.get('v', 0),
+                        'timestamp': pl.from_epoch(bar.get('t', 0), time_unit='ms')
                     }
                 else:
                     return {}

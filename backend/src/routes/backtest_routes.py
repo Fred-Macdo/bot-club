@@ -39,7 +39,8 @@ class BacktestStatus(BaseModel):
     error: Optional[str] = None
 
 class TradeDetail(BaseModel):
-    id: int
+    id: Optional[int] = None
+    position_id: Optional[str] = None
     symbol: str
     side: str
     entry_date: datetime
@@ -51,10 +52,10 @@ class TradeDetail(BaseModel):
     return_pct: float
 
 class EquityCurve(BaseModel):
-    dates: List[datetime]
-    total_equity: List[float]
-    cash_balance: List[float]
-    invested_capital: List[float]
+    timestamps: List[str]
+    values: List[float]
+    cash: List[float]
+    positions_value: List[float]
 
 class BacktestMetrics(BaseModel):
     initial_capital: float
@@ -166,21 +167,22 @@ async def run_backtest_async(
             
             # Create mock results
             results = {
-                "metrics": {
+                "stats": {
                     "final_equity": initial_capital * 1.1,  # 10% return
-                    "total_return": 0.1,
+                    "total_return_pct": 10.0,
                     "max_drawdown": -0.05,
                     "sharpe_ratio": 1.2,
                     "win_rate": 0.6,
                     "profit_factor": 1.5,
-                    "total_trades": 10
+                    "total_trades": 10,
+                    "winning_trades": 6,
+                    "losing_trades": 4
                 },
-                "equity_curve": {
-                    "dates": [start_date, end_date],
-                    "total_equity": [initial_capital, initial_capital * 1.1],
-                    "cash_balance": [initial_capital * 0.1, initial_capital * 0.2],
-                    "invested_capital": [initial_capital * 0.9, initial_capital * 0.9]
-                }
+                "equity_curve": [
+                    {"timestamp": start_date, "value": initial_capital, "cash": initial_capital, "positions_value": 0},
+                    {"timestamp": end_date, "value": initial_capital * 1.1, "cash": initial_capital * 0.2, "positions_value": initial_capital * 0.9}
+                ],
+                "trades": []
             }
             
             # Update status to completed
@@ -190,40 +192,31 @@ async def run_backtest_async(
             })
         
         # Save results to database
+        strategy_name = strategy_config.get("name", "Unknown Strategy")
+        
         backtest_result_data = {
-            "id": backtest_id,
-            "user_id": user_id,
-            "strategy_id": strategy_config['id'],
+            "user_id": ObjectId(user_id),
+            "strategy_id": ObjectId(strategy_config['_id']),
+            "strategy_name": strategy_name,
             "initial_capital": initial_capital,
-            "final_equity": results['metrics']['final_equity'],
-            "total_return": results['metrics']['total_return'],
-            "max_drawdown": results['metrics']['max_drawdown'],
-            "sharpe_ratio": results['metrics']['sharpe_ratio'],
-            "win_rate": results['metrics']['win_rate'],
-            "profit_factor": results['metrics']['profit_factor'],
-            "total_trades": results['metrics']['total_trades'],
+            "start_date": start_date,
+            "end_date": end_date,
+            "timeframe": timeframe,
+            "data_provider": data_provider,
+            "stats": results['stats'],
             "equity_curve": results['equity_curve'],
             "created_at": datetime.utcnow()
         }
-        await db.backtest_results.insert_one(backtest_result_data)
         
+        insert_result = await db.backtests.insert_one(backtest_result_data)
+        new_backtest_id = insert_result.inserted_id
+
         # Save trades
-        if results['trades']:
+        if 'trades' in results and results['trades']:
             trades_to_insert = []
             for trade_data in results['trades']:
-                trade = {
-                    "backtest_id": backtest_id,
-                    "symbol": trade_data['symbol'],
-                    "side": trade_data['side'],
-                    "entry_date": trade_data['entry_date'],
-                    "entry_price": trade_data['entry_price'],
-                    "exit_date": trade_data.get('exit_date'),
-                    "exit_price": trade_data.get('exit_price'),
-                    "quantity": trade_data['quantity'],
-                    "pnl": trade_data['pnl'],
-                    "return_pct": trade_data['return_pct']
-                }
-                trades_to_insert.append(trade)
+                trade_data["backtest_id"] = new_backtest_id
+                trades_to_insert.append(trade_data)
             await db.trades.insert_many(trades_to_insert)
         
         # Update status to completed
@@ -362,10 +355,10 @@ async def get_backtest_results(
         backtest_id=backtest_id,
         strategy_name=strategy_name,
         equity_curve=EquityCurve(
-            dates=backtest.equity_curve['dates'],
-            total_equity=backtest.equity_curve['total_equity'],
-            cash_balance=backtest.equity_curve['cash_balance'],
-            invested_capital=backtest.equity_curve['invested_capital']
+            timestamps=backtest.equity_curve['dates'],
+            values=backtest.equity_curve['total_equity'],
+            cash=backtest.equity_curve['cash_balance'],
+            positions_value=backtest.equity_curve['invested_capital']
         ),
         trades=[
             TradeDetail(
@@ -587,27 +580,22 @@ class EquityPoint(BaseModel):
     value: float
     cash: float
     positions_value: float
-    action: Optional[str] = None
 
 class BacktestDetailedSummary(BaseModel):
     id: str
     strategy_id: str
     strategy_name: str
-    total_return: float
-    sharpe_ratio: float
-    max_drawdown: float
-    total_trades: int
     start_date: str
     end_date: str
     created_at: datetime
     # Add backtest parameters
-    initial_capital: float
     timeframe: str
     data_provider: str
     # Add detailed fields
     equity_curve: List[EquityPoint]
     trades: List[TradeDetail]
     performance: BacktestMetrics
+
 
 # Update the get_user_backtests_detailed endpoint to handle the actual MongoDB structure
 
@@ -622,148 +610,25 @@ async def get_user_backtests(
         backtests_cursor = db.backtests.find({"user_id": current_user.id})
         backtests = await backtests_cursor.to_list(length=None)
         
-        detailed_backtests = []
-        
-        for backtest in backtests:
-            backtest_id = str(backtest["_id"])
-            
-            # Fetch trades for this backtest from the trades collection
-            trades_cursor = db.trades.find({"backtest_id": backtest_id})
-            trades = await trades_cursor.to_list(length=None)
-            logger.info(f"Backtest Routes: Trades length: {len(trades)}")
-            # Get strategy name - try different possible field names
-            strategy_id = backtest.get("strategy_id", "")
-            strategy_name = backtest.get("strategy_name", "Unknown Strategy")
-            
-            if strategy_id and strategy_name == "Unknown Strategy":
-                # Try to find strategy in different collections
-                try:
-                    strategy = await db.strategies.find_one({"_id": ObjectId(strategy_id)})
-                    if not strategy:
-                        strategy = await db.strategy.find_one({"_id": ObjectId(strategy_id)})
-                    if not strategy:
-                        strategy = await db.default_strategies.find_one({"_id": ObjectId(strategy_id)})
-                    
-                    if strategy:
-                        strategy_name = strategy.get("name", "Unknown Strategy")
-                except:
-                    pass  # Keep default strategy name if ObjectId conversion fails
-            
-            # Convert trades to TradeDetail objects
-            trade_details = []
-            trade_counter = 0
-            for trade in trades:
-                trade_details.append(TradeDetail(
-                    id=trade.get("id", trade_counter),
-                    symbol=trade.get("symbol", ""),
-                    side=trade.get("side", trade.get("trade_type", "long")),
-                    entry_date=trade.get("entry_date", trade.get("entry_time", datetime.utcnow())),
-                    entry_price=trade.get("entry_price", 0),
-                    exit_date=trade.get("exit_date", trade.get("exit_time")),
-                    exit_price=trade.get("exit_price"),
-                    quantity=trade.get("quantity", trade.get("shares", 0)),
-                    pnl=trade.get("pnl", 0),
-                    return_pct=trade.get("return_pct", trade.get("pnl_pct", 0))
-                ))
-                trade_counter += 1
-            logger.info(f"Backtest Routes: Trade details length: {len(trade_details)}")
-            # Handle equity curve - convert from new format
-            equity_curve_data = backtest.get("equity_curve", [])
-            equity_points = []
-            
-            if isinstance(equity_curve_data, list):
-                for point in equity_curve_data:
-                    if isinstance(point, dict):
-                        equity_points.append(EquityPoint(
-                            timestamp=point.get("timestamp", ""),
-                            value=point.get("value", 0),
-                            cash=point.get("cash", 0),
-                            positions_value=point.get("positions_value", 0),
-                            action=point.get("action")
-                        ))
-            
-            # Extract backtest parameters
-            initial_capital = backtest.get("initial_capital", 100000.0)
-            timeframe = backtest.get("timeframe", "1d")
-            data_provider = backtest.get("data_provider", "yahoo")
-            
-            # Create performance metrics
-            stats = backtest.get("stats", {})
-            final_equity = backtest.get("final_equity", stats.get("final_equity", initial_capital))
-            total_return = backtest.get("total_return", stats.get("total_return", 0))
-            total_trades = backtest.get("total_trades", stats.get("total_trades", len(trades)))
-            win_rate = backtest.get("win_rate", stats.get("win_rate", 0))
-            max_drawdown = backtest.get("max_drawdown", stats.get("max_drawdown", 0))
-            sharpe_ratio = backtest.get("sharpe_ratio", stats.get("sharpe_ratio", 0))
-            profit_factor = backtest.get("profit_factor", stats.get("profit_factor", 0))
-            
-            # Calculate winning/losing trades
-            winning_trades = len([t for t in trades if t.get("pnl", 0) > 0])
-            losing_trades = len([t for t in trades if t.get("pnl", 0) <= 0])
-            
-            performance = BacktestMetrics(
-                initial_capital=initial_capital,
-                final_equity=final_equity,
-                total_return=total_return,
-                total_trades=total_trades,
-                winning_trades=winning_trades,
-                losing_trades=losing_trades,
-                win_rate=win_rate,
-                max_drawdown=max_drawdown,
-                sharpe_ratio=sharpe_ratio,
-                profit_factor=profit_factor
-            )
-            
-            detailed_backtests.append(BacktestDetailedSummary(
-                id=backtest_id,
-                strategy_id=str(backtest.get("strategy_id", "")),
-                strategy_name=strategy_name,
-                total_return=total_return,
-                sharpe_ratio=sharpe_ratio,
-                max_drawdown=max_drawdown,
-                total_trades=total_trades,
-                start_date=backtest.get("start_date", ""),
-                end_date=backtest.get("end_date", ""),
-                created_at=backtest.get("created_at", datetime.utcnow()),
-                initial_capital=initial_capital,
-                timeframe=timeframe,
-                data_provider=data_provider,
-                equity_curve=equity_points,
-                trades=trade_details,
-                performance=performance
-            ))
-        
-        return detailed_backtests
-        
-    except Exception as e:
-        logger.error(f"Error fetching user backtests: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch backtest data: {str(e)}")
+        if not backtests:
+            logger.info(f"No backtests found for user_id: {current_user.id}")
+            return []
 
-@router.get("/user/detailed", response_model=List[BacktestDetailedSummary])
-async def get_user_backtests_detailed(
-    db: AsyncIOMotorDatabase = Depends(get_db),
-    current_user: UserInDB = Depends(get_current_user_from_token)
-):
-    """Get detailed backtests for the current user with equity curve and trades"""
-    try:
-        # Get all backtests for the user from the backtests collection
-        backtests_cursor = db.backtests.find({"user_id": current_user.id})
-        backtests = await backtests_cursor.to_list(length=None)
-        
         detailed_backtests = []
         
         for backtest in backtests:
             backtest_id = str(backtest["_id"])
             
-            # Fetch trades for this backtest from the trades collection
-            trades_cursor = db.trades.find({"backtest_id": backtest_id})
+            # Fetch trades for this backtest from the trades collection, using ObjectId
+            trades_cursor = db.trades.find({"backtest_id": backtest["_id"]})
             trades = await trades_cursor.to_list(length=None)
             
             # Get strategy name - try different possible field names
-            strategy_id = backtest.get("strategy_id", "")
+            strategy_id_obj = backtest.get("strategy_id")
             strategy_name = backtest.get("strategy_name", "Unknown Strategy")
             
-            if strategy_id and strategy_name == "Unknown Strategy":
+            if strategy_id_obj and strategy_name == "Unknown Strategy":
+                strategy_id = str(strategy_id_obj)
                 # Try to find strategy in different collections
                 strategy = await db.strategies.find_one({"_id": ObjectId(strategy_id)})
                 if not strategy:
@@ -778,7 +643,8 @@ async def get_user_backtests_detailed(
             trade_details = []
             for i, trade in enumerate(trades):
                 trade_details.append(TradeDetail(
-                    id=trade.get("id", trade.get("_id", i)),
+                    id=trade.get("id", i),
+                    position_id=trade.get("position_id"),
                     symbol=trade.get("symbol", ""),
                     side=trade.get("side", trade.get("trade_type", "long")),
                     entry_date=trade.get("entry_date", trade.get("entry_time")),
@@ -790,67 +656,40 @@ async def get_user_backtests_detailed(
                     return_pct=trade.get("return_pct", trade.get("pnl_pct", 0))
                 ))
             
-            # Handle equity curve - convert from new format
+            # Handle equity curve
             equity_curve_data = backtest.get("equity_curve", [])
-            equity_points = []
-            
-            if isinstance(equity_curve_data, list):
-                for point in equity_curve_data:
-                    if isinstance(point, dict):
-                        equity_points.append(EquityPoint(
-                            timestamp=point.get("timestamp", ""),
-                            value=point.get("value", 0),
-                            cash=point.get("cash", 0),
-                            positions_value=point.get("positions_value", 0),
-                            action=point.get("action")
-                        ))
-            
-            # Extract backtest parameters
-            initial_capital = backtest.get("initial_capital", 100000.0)
-            timeframe = backtest.get("timeframe", "1d")
-            data_provider = backtest.get("data_provider", "yahoo")
-            
-            # Create performance metrics
+            equity_points = [EquityPoint(**point) for point in equity_curve_data if isinstance(point, dict)]
+
+            # Performance metrics
             stats = backtest.get("stats", {})
-            final_equity = backtest.get("final_equity", stats.get("final_equity", initial_capital))
-            total_return = backtest.get("total_return", stats.get("total_return", 0))
-            total_trades = backtest.get("total_trades", stats.get("total_trades", len(trades)))
-            win_rate = backtest.get("win_rate", stats.get("win_rate", 0))
-            max_drawdown = backtest.get("max_drawdown", stats.get("max_drawdown", 0))
-            sharpe_ratio = backtest.get("sharpe_ratio", stats.get("sharpe_ratio", 0))
-            profit_factor = backtest.get("profit_factor", stats.get("profit_factor", 0))
-            
-            # Calculate winning/losing trades
+            initial_capital = backtest.get("initial_capital", 100000.0)
+
+            # Calculate winning/losing trades from actual trades data for accuracy
             winning_trades = len([t for t in trades if t.get("pnl", 0) > 0])
             losing_trades = len([t for t in trades if t.get("pnl", 0) <= 0])
-            
+
             performance = BacktestMetrics(
                 initial_capital=initial_capital,
-                final_equity=final_equity,
-                total_return=total_return,
-                total_trades=total_trades,
-                winning_trades=winning_trades,
-                losing_trades=losing_trades,
-                win_rate=win_rate,
-                max_drawdown=max_drawdown,
-                sharpe_ratio=sharpe_ratio,
-                profit_factor=profit_factor
+                final_equity=stats.get("final_equity", initial_capital),
+                total_return=stats.get("total_return_pct", stats.get("total_return", 0)),
+                total_trades=stats.get("total_trades", len(trades)),
+                winning_trades=stats.get("winning_trades", winning_trades),
+                losing_trades=stats.get("losing_trades", losing_trades),
+                win_rate=stats.get("win_rate", 0),
+                max_drawdown=stats.get("max_drawdown", 0),
+                sharpe_ratio=stats.get("sharpe_ratio", 0),
+                profit_factor=stats.get("profit_factor", 0)
             )
             
             detailed_backtests.append(BacktestDetailedSummary(
                 id=backtest_id,
-                strategy_id=str(backtest.get("strategy_id", "")),
+                strategy_id=str(strategy_id_obj) if strategy_id_obj else "",
                 strategy_name=strategy_name,
-                total_return=total_return,
-                sharpe_ratio=sharpe_ratio,
-                max_drawdown=max_drawdown,
-                total_trades=total_trades,
                 start_date=backtest.get("start_date", ""),
                 end_date=backtest.get("end_date", ""),
                 created_at=backtest.get("created_at", datetime.utcnow()),
-                initial_capital=initial_capital,
-                timeframe=timeframe,
-                data_provider=data_provider,
+                timeframe=backtest.get("timeframe", ""),
+                data_provider=backtest.get("data_provider", ""),
                 equity_curve=equity_points,
                 trades=trade_details,
                 performance=performance
@@ -859,5 +698,5 @@ async def get_user_backtests_detailed(
         return detailed_backtests
         
     except Exception as e:
-        logger.error(f"Error fetching user backtests: {e}")
+        logger.error(f"Error fetching user backtests: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch backtest data: {str(e)}")

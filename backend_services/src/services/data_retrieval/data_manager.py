@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from .data_providers import DataProviderFactory, BaseDataProvider, TIMEFRAME_MAPPINGS
+from .data_providers import DataProviderFactory, BaseDataProvider, AVAILABLE_CRYPTO_ASSETS, TIMEFRAME_MAPPINGS
 from ..utils.date_utils import DateUtils
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,10 @@ class DataManager:
         self.data_cache = {}
         self.data_provider = None
     
-    async def initialize_provider(self, data_provider_name: str, user_id: str):
+    async def initialize_provider(self, 
+                                  data_provider_name: str, 
+                                  user_id: str,
+                                  ):
         """Initialize data provider using DataProviderFactory"""
         try:
             # Get user configuration for API keys only
@@ -91,8 +94,97 @@ class DataManager:
             logger.error(f"Error initializing data provider: {e}, falling back to Yahoo Finance")
             self.data_provider = DataProviderFactory.get_provider('yahoo')
     
-    async def fetch_historical_data(self, symbols: List[str], start_date: str, end_date: str, timeframe: str, data_provider: str) -> pl.DataFrame:
+    def _convert_to_datetime(self, date_str: str) -> datetime:
+        """Convert date string to datetime object"""
+        try:
+            return datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            try:
+                return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                # Try to parse ISO format
+                return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    
+    def _standardize_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Standardize column names and ensure required columns exist"""
+        if df.height == 0:
+            return df
+            
+        # Standard column mapping
+        column_mapping = {
+            't': 'datetime',
+            'timestamp': 'datetime',
+            'time': 'datetime',
+            'date': 'datetime'
+        }
+        
+        # Rename columns if they exist
+        for old_col, new_col in column_mapping.items():
+            if old_col in df.columns:
+                df = df.rename({old_col: new_col})
+        
+        # Ensure datetime column exists
+        if 'datetime' not in df.columns:
+            if df.get_column_index('Date') is not None:
+                df = df.rename({'Date': 'datetime'})
+            elif hasattr(df, 'index') and isinstance(df.index, pl.datatypes.Datetime):
+                # If index is datetime, make it a column
+                df = df.with_row_count('datetime')
+        
+        # Ensure required columns exist with default values
+        required_columns = {
+            'open': 0.0,
+            'high': 0.0,
+            'low': 0.0,
+            'close': 0.0,
+            'volume': 0.0,
+            'vwap': 0.0
+        }
+        
+        for col, default_val in required_columns.items():
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(default_val).alias(col))
+        
+        return df
+    
+    def _calculate_lookback_days(self, timeframe: str, limit: int) -> int:
+        """Calculate how many days to look back to get enough data points"""
+        timeframe_upper = timeframe.upper()
+        
+        if timeframe_upper in ['1M', '2M', '5M', '15M', '30M']:
+            # For minute data, assume 6.5 trading hours per day (390 minutes)
+            minutes_per_timeframe = int(timeframe_upper.replace('M', ''))
+            points_per_day = 390 / minutes_per_timeframe
+            days_needed = max(1, int(limit / points_per_day))
+            return days_needed * 2  # Buffer for weekends and holidays
+            
+        elif timeframe_upper in ['1H', '60M']:
+            # For hourly data, assume 6.5 trading hours per day
+            points_per_day = 6.5
+            days_needed = max(1, int(limit / points_per_day))
+            return days_needed * 2
+            
+        elif timeframe_upper in ['1D', '1DAY']:
+            # For daily data, 1 point per trading day
+            return limit * 2  # Buffer for weekends and holidays
+            
+        elif timeframe_upper in ['1W', '1WK', '1WEEK']:
+            # For weekly data
+            return limit * 10  # About 10 days per week including weekends
+            
+        elif timeframe_upper in ['1MO', '1MONTH']:
+            # For monthly data
+            return limit * 35  # About 35 days per month
+            
+        else:
+            # Default fallback
+            return limit * 2
+    
+    async def fetch_historical_data(self, symbols: List[str], start_date: str, end_date: str, timeframe: str) -> pl.DataFrame:
         """Fetch historical data for symbols using the initialized provider"""
+        if not self.data_provider:
+            raise ValueError("Data provider not initialized. Call initialize_provider() first.")
+        
         cache_key = f"{'-'.join(symbols)}_{start_date}_{end_date}_{timeframe}_{self.data_provider.get_provider_name()}"
         
         if cache_key in self.data_cache:
@@ -102,47 +194,132 @@ class DataManager:
         logger.info(f"Fetching data for {symbols} from {start_date} to {end_date} using {self.data_provider.get_provider_name()}")
         
         try:
-            start_dt = self._convert_to_datetime(start_date)
-            end_dt = self._convert_to_datetime(end_date)
+            if type(start_date) == str:
+                start_dt = self._convert_to_datetime(start_date)
+            else:
+                start_dt = start_date
+            if type(end_date) == str:
+                end_dt = self._convert_to_datetime(end_date)
+            else:
+                end_dt = end_date
             
             all_data = []
-            for symbol in symbols:
-                try:
-                    data = await self.data_provider.get_historical_data(
-                        symbol=symbol,
-                        start_date=start_dt,
-                        end_date=end_dt,
-                        timeframe=timeframe,
-                        data_provider=data_provider
-                    )
-                    
-                    # Fix: Check if Polars DataFrame is empty using height
-                    if data.height > 0:  # Polars uses .height instead of .empty
-                        # Add symbol column if it doesn't exist
-                        if 'symbol' not in data.columns:
-                            data = data.with_columns(pl.lit(symbol).alias("symbol"))
-                        all_data.append(data)
-                        logger.info(f"Retrieved {data.height} data points for {symbol}")
-                    else:
-                        logger.warning(f"No data retrieved for {symbol}")
+            
+            # Handle different providers differently
+            provider_name = self.data_provider.get_provider_name().lower()
+            
+            if provider_name == 'alpaca':
+                data = await self.data_provider.get_historical_data(
+                    symbols=symbols,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    timeframe=timeframe
+                )
+                all_data.append(data)
+                logger.info(f"Retrieved {data.height} data points for {symbols}")
+            elif provider_name == 'yahoo':
+                # Yahoo Finance - fetch data symbol by symbol
+                for symbol in symbols:
+                    try:
+                        data = await self.data_provider.get_historical_data(
+                            symbol=symbol,
+                            start_date=start_dt,
+                            end_date=end_dt,
+                            timeframe=timeframe
+                        )
                         
-                except Exception as e:
-                    logger.error(f"Error fetching data for {symbol}: {e}")
-                    continue
+                        if isinstance(data, pl.DataFrame) and data.height > 0:
+                            # Add symbol column if it doesn't exist
+                            if 'symbol' not in data.columns:
+                                data = data.with_columns(pl.lit(symbol).alias("symbol"))
+                            all_data.append(data)
+                            logger.info(f"Retrieved {data.height} data points for {symbol}")
+                        elif hasattr(data, 'empty') and not data.empty:
+                            # Handle pandas DataFrame
+                            polars_data = pl.from_pandas(data.reset_index())
+                            if 'symbol' not in polars_data.columns:
+                                polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
+                            all_data.append(polars_data)
+                            logger.info(f"Retrieved {len(data)} data points for {symbol}")
+                        else:
+                            logger.warning(f"No data retrieved for {symbol}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error fetching data for {symbol}: {e}")
+                        continue
+            
+            elif provider_name == 'polygon':
+                crypto_symbols = ["X:" + s.upper() + 'USD' for s in symbols if s.upper() in AVAILABLE_CRYPTO_ASSETS]
+                logger.info(f"DEBUG: DATA_MANAGER: Crypto symbols: {crypto_symbols}")
+                stock_symbols = [s for s in symbols if s.upper() not in AVAILABLE_CRYPTO_ASSETS]
+                logger.info(f"DEBUG: DATA_MANAGER: Stock symbols: {stock_symbols}")
+                # For Yahoo and Polygon, fetch data symbol by symbol
+                for symbol in stock_symbols:
+                    try:
+                        data = await self.data_provider.get(
+                            symbol=symbol,
+                            start_date=start_dt,
+                            end_date=end_dt,
+                            timeframe=timeframe
+                        )
+                        
+                        if isinstance(data, pl.DataFrame) and data.height > 0:
+                            # Add symbol column if it doesn't exist
+                            if 'symbol' not in data.columns:
+                                data = data.with_columns(pl.lit(symbol).alias("symbol"))
+                            all_data.append(data)
+                            logger.info(f"Retrieved {data.height} data points for {symbol}")
+                        elif hasattr(data, 'empty') and not data.empty:
+                            # Handle pandas DataFrame
+                            polars_data = pl.from_pandas(data.reset_index())
+                            if 'symbol' not in polars_data.columns:
+                                polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
+                            all_data.append(polars_data)
+                            logger.info(f"Retrieved {len(data)} data points for {symbol}")
+                        else:
+                            logger.warning(f"No data retrieved for {symbol}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error fetching data for {symbol}: {e}")
+                        continue
+
+                for symbol in crypto_symbols:
+                    try:
+                        data = await self.data_provider.get_crypto_historical_data(
+                            symbol=symbol,
+                            start_date=start_dt,
+                            end_date=end_dt,
+                            timeframe=timeframe
+                        )
+                        if isinstance(data, pl.DataFrame) and data.height > 0:
+                            all_data.append(data)
+                            logger.info(f"Retrieved {data.height} data points for Crypto {symbol}")
+                        else:
+                            logger.warning(f"No data retrieved for Crypto {symbol}")
+                    except Exception as e:
+                        logger.error(f"Error fetching data for Crypto {symbol}: {e}")
+                        continue
             
             if not all_data:
-                raise ValueError("No data retrieved for any symbols")
+                logger.warning("No data retrieved for any symbols")
+                return pl.DataFrame()
             
+            # Combine all data
             combined_data = pl.concat(all_data, how="vertical")
             combined_data = self._standardize_columns(combined_data)
-            combined_data = combined_data.sort(["datetime", "symbol"])
+            
+            # Sort by datetime and symbol
+            if 'datetime' in combined_data.columns and 'symbol' in combined_data.columns:
+                combined_data = combined_data.sort(["datetime", "symbol"])
+            elif 'timestamp' in combined_data.columns and 'symbol' in combined_data.columns:
+                combined_data = combined_data.sort(["timestamp", "symbol"])
             
             self.data_cache[cache_key] = combined_data
-            logger.info(f"Retrieved {len(combined_data)} total data points")
+            logger.info(f"Retrieved {combined_data.height} total data points")
             return combined_data
             
         except Exception as e:
-            logger.error(f"Error fetching data: {e}")
+            logger.error(f"Error fetching historical data: {e}")
             raise
     
     async def fetch_data(self, symbols: List[str], timeframe: str, limit: int, data_provider: str) -> pl.DataFrame:
@@ -152,6 +329,9 @@ class DataManager:
         This function calculates a suitable start date to ensure enough data is retrieved
         to satisfy the limit, accounting for non-trading days.
         """
+        if not self.data_provider:
+            raise ValueError("Data provider not initialized. Call initialize_provider() first.")
+        
         logger.info(f"Fetching latest {limit} data points for {symbols} with timeframe {timeframe} using {data_provider}")
 
         end_date = datetime.now()
@@ -168,173 +348,23 @@ class DataManager:
 
         try:
             historical_data = await self.fetch_historical_data(
-                symbols=symbols,
-                start_date=start_date_str,
-                end_date=end_date_str,
-                timeframe=timeframe,
-                data_provider=data_provider
-            )
+                    symbols=symbols,
+                    start_date=start_date_str,
+                    end_date=end_date_str,
+                    timeframe=timeframe
+                )
 
             if historical_data.height == 0:
                 return historical_data
 
             # Ensure we only return the last `limit` data points per symbol
-            return historical_data.group_by('symbol', maintain_order=True).tail(limit)
+            if 'symbol' in historical_data.columns:
+                return historical_data.group_by('symbol', maintain_order=True).tail(limit)
+            else:
+                # If no symbol column, just take the last limit rows
+                return historical_data.tail(limit)
 
         except Exception as e:
             logger.error(f"Failed to fetch latest market data: {e}")
             # Return an empty DataFrame on failure to prevent crashes downstream
             return pl.DataFrame()
-
-    def _calculate_lookback_days(self, timeframe: str, limit: int) -> int:
-        """
-        Calculate the number of days to look back based on timeframe and limit.
-        Uses the TIMEFRAME_MAPPINGS to categorize timeframes properly.
-        """
-        from .data_providers import TIMEFRAME_MAPPINGS
-        
-        # Normalize timeframe to match our mappings
-        normalized_timeframe = self._normalize_timeframe(timeframe)
-        
-        if normalized_timeframe not in TIMEFRAME_MAPPINGS:
-            logger.warning(f"Unknown timeframe format: {timeframe}. Using daily assumption for lookback calculation.")
-            return int(limit * 1.8)  # Default assumption: ~7 trading days in 10 calendar days
-        
-        # Determine timeframe category based on the normalized timeframe
-        if normalized_timeframe in ['1M', '2M', '5M', '15M', '30M']:
-            # Minute-based timeframes
-            minutes = self._extract_minutes_from_timeframe(normalized_timeframe)
-            # Assume 6.5 trading hours per day (390 minutes)
-            trading_days_needed = (limit * minutes) / 390
-            # Add buffer for weekends, holidays, and market closures
-            return int(trading_days_needed * 2.5) + 5
-            
-        elif normalized_timeframe in ['60M', '1H']:
-            # Hour-based timeframes
-            hours = 1  # Both 60M and 1H represent 1 hour
-            # Assume 6.5 trading hours per day
-            trading_days_needed = (limit * hours) / 6.5
-            return int(trading_days_needed * 2.5) + 5
-            
-        elif normalized_timeframe in ['1d', '1D']:
-            # Daily timeframes
-            return int(limit * 1.8)  # ~7 trading days in 10 calendar days
-            
-        elif normalized_timeframe in ['1wk', '1w', '1W']:
-            # Weekly timeframes
-            return limit * 10  # Assume ~10 calendar days per trading week
-            
-        elif normalized_timeframe in ['1mo', '3mo']:
-            # Monthly timeframes
-            return limit * 35  # Assume ~35 days per month
-            
-        else:
-            # Fallback for any other timeframes
-            logger.warning(f"Unhandled timeframe category for: {timeframe}. Using daily assumption.")
-            return int(limit * 1.8)
-
-    def _normalize_timeframe(self, timeframe: str) -> str:
-        """
-        Normalize various timeframe formats to match TIMEFRAME_MAPPINGS keys.
-        """
-        # Handle common variations
-        timeframe_upper = timeframe.upper()
-        
-        # Map common variations to our standard format
-        variations = {
-            '1MIN': '1M',
-            '5MIN': '5M', 
-            '15MIN': '15M',
-            '30MIN': '30M',
-            '60MIN': '60M',
-            '1HOUR': '1H',
-            '1DAY': '1D',
-            '1WEEK': '1W',
-            '1MONTH': '1mo',
-            # Add more variations as needed
-        }
-        
-        if timeframe_upper in variations:
-            return variations[timeframe_upper]
-        
-        # If it's already in our mapping, return as-is
-        if timeframe in TIMEFRAME_MAPPINGS or timeframe_upper in TIMEFRAME_MAPPINGS:
-            return timeframe if timeframe in TIMEFRAME_MAPPINGS else timeframe_upper
-        
-        # Try lowercase version
-        timeframe_lower = timeframe.lower()
-        if timeframe_lower in TIMEFRAME_MAPPINGS:
-            return timeframe_lower
-            
-        return timeframe  # Return original if no mapping found
-
-    def _extract_minutes_from_timeframe(self, timeframe: str) -> int:
-        """Extract the number of minutes from minute-based timeframes."""
-        minute_mappings = {
-            '1M': 1,
-            '2M': 2,
-            '5M': 5,
-            '15M': 15,
-            '30M': 30,
-            '60M': 60
-        }
-        return minute_mappings.get(timeframe, 1)
-
-    def _convert_to_datetime(self, date_input) -> datetime:
-        """Convert various date formats to datetime"""
-        if isinstance(date_input, datetime):
-            return date_input
-        elif isinstance(date_input, date):  # Add support for date objects
-            return datetime.combine(date_input, datetime.min.time())
-        elif isinstance(date_input, str):
-            # Try different date formats
-            for fmt in ['%Y-%m-%d', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%SZ']:
-                try:
-                    return datetime.strptime(date_input, fmt)
-                except ValueError:
-                    continue
-            raise ValueError(f"Unable to parse date string: {date_input}")
-        else:
-            raise ValueError(f"Unsupported date type: {type(date_input)}")
-    
-    def _standardize_columns(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Standardize column names across different providers"""
-        column_mapping = {
-            'Date': 'datetime', 'Datetime': 'datetime', 
-            'date': 'datetime', 'time': 'datetime', 
-            'timestamp': 'datetime', 't': 'datetime',
-            'Open': 'open', 'o': 'open', 'open': 'open', 'high': 'high', 
-            'High': 'high', 'h': 'high', 'Low': 'low', 'l': 'low', 'low': 'low', 
-            'Close': 'close', 'c': 'close', 'close': 'close', 
-             'volume': 'volume', 'Volume': 'volume', 'v': 'volume',
-        }
-        
-        existing_cols = df.columns
-        rename_dict = {col: column_mapping[col] for col in existing_cols if col in column_mapping}
-        if rename_dict:
-            df = df.rename(rename_dict)
-        
-        required_columns = ['datetime', 'open', 'high', 'low', 'close', 'volume', 'symbol']
-        for col in required_columns:
-            if col not in df.columns:
-                if col == 'datetime':
-                    df = df.with_columns(pl.arange(0, len(df)).alias('datetime'))
-                else:
-                    df = df.with_columns(pl.lit(0).alias(col))
-        
-        return df
-    
-    def get_supported_timeframes(self) -> List[str]:
-        """Get supported timeframes for the current data provider"""
-        if self.data_provider is None:
-            return []
-        provider_name = self.data_provider.get_provider_name()
-        supported = DataProviderFactory.get_supported_timeframes(provider_name)
-        return supported.get(provider_name, [])
-    
-    def validate_timeframe(self, timeframe: str) -> bool:
-        """Validate if a timeframe is supported by the current data provider"""
-        if self.data_provider is None:
-            return False
-        supported_timeframes = self.get_supported_timeframes()
-        return timeframe in supported_timeframes 

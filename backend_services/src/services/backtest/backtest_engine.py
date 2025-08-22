@@ -62,9 +62,7 @@ class BacktestEngine:
             symbols, 
             params.start_date, 
             params.end_date, 
-            timeframe, 
-            params.data_provider
-        )
+            timeframe        )
         
         portfolio = Portfolio(initial_capital=params.initial_capital)
         

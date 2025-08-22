@@ -72,7 +72,7 @@ class StrategyExecutor:
                 logger.info(f"----------------------------------------")
                 current_datetime = row_dict['datetime']
                 current_price = row_dict['close']
-                logger.info(f"Strategy Executor Current Date, Symbol, Price: {current_datetime}: {symbol} - {current_price}")
+                logger.info(f"Strategy Executor Current Date: {current_datetime} =  Symbol:{symbol} - Price: ${current_price}")
                 
                 # Create current prices dictionary for portfolio valuation
                 current_prices = {symbol: current_price}
@@ -116,7 +116,7 @@ class StrategyExecutor:
                             strategy_name=strategy_name,
                             exit_reason=exit_reason
                         )
-                        
+                        logger.info(f"Strategy Executor Trade: {trade}")
                         trades.append(trade)
                     
                     # Remove the closed position

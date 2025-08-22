@@ -134,7 +134,7 @@ const StrategyBuilderInterface = () => {
     { name: 'ADX', label: 'Average Directional Index', defaultParams: { period: 14 } },
     { name: 'OBV', label: 'On Balance Volume', defaultParams: { period: 14 } }
   ];  const comparisons = ['crosses_above', 'crosses_below', 'greater_than', 'less_than', 'equals', 'between'];
-  const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
+  const timeframes = ['1Min ', '2Min', '5Min', '10Min', '15Min', '30Min', '1Hour', '4Hour', '1Day', '2Day', '1Week', '2Week', '1Month', '3Month'];
     // Popular symbols for autocomplete suggestions
   const popularSymbols = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'CRM', 'BTC-USD', 'ETH-USD', 'SPY', 'QQQ', 'VOO'];
   // Available value options for conditions
