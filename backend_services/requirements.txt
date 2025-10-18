@@ -25,14 +25,13 @@ pandas>=2.0.0
 
 # Technical analysis (alternatives to TA-Lib)
 polars-talib==0.1.5
-pandas-ta>=0.3.14b0
 ta>=0.10.2
 finta>=1.3
+alpaca-py>=0.42.2
 
 # Trading/Financial libraries
-lumibot
+lumibot==3.18.1
 thetadata==0.9.11
-quantstats-lumi
 
 
 # Optional: Redis for advanced task queuing

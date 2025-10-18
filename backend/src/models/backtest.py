@@ -6,6 +6,15 @@ from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from ..utils.mongo_helpers import PyObjectId
 
+class BacktestRunRequest(BaseModel):
+    strategy_id: str
+    strategy_type: str
+    initial_capital: float
+    timeframe: str
+    start_date: str
+    end_date: str
+    data_provider: str
+
 class BacktestParams(BaseModel):
     """Parameters for running a backtest"""
     strategy_id: str
@@ -15,41 +24,48 @@ class BacktestParams(BaseModel):
     end_date: date
     data_provider: str
 
-class TradeData(BaseModel):
+class TradeDetail(BaseModel):
     """Individual trade data"""
-    id: int = Field(..., description="Trade ID")
+    id: Optional[int] = Field(None, description="Trade ID")
+    position_id: Optional[str] = Field(None, description="Position ID")
     symbol: str = Field(..., description="Trading symbol")
     side: str = Field(..., description="Trade side (buy/sell/long/short)")
-    entry_date: str = Field(..., description="Entry date")
+    entry_date: datetime = Field(..., description="Entry date")
     entry_price: float = Field(..., description="Entry price")
-    exit_date: str = Field(..., description="Exit date")
-    exit_price: float = Field(..., description="Exit price")
-    quantity: int = Field(..., description="Quantity traded")
+    exit_date: Optional[datetime] = Field(None, description="Exit date")
+    exit_price: Optional[float] = Field(None, description="Exit price")
+    quantity: float = Field(..., description="Quantity traded")
     pnl: float = Field(..., description="Profit/Loss")
     return_pct: float = Field(..., description="Return percentage")
     data_context: Optional[List[Dict[str, Any]]] = Field(None, description="OHLCV data context around trade")
 
 class EquityPoint(BaseModel):
     """Equity curve data point"""
-    date: str = Field(..., description="Date")
-    total_equity: float = Field(..., description="Total portfolio equity")
-    cash_balance: float = Field(..., description="Cash balance")
-    invested_capital: float = Field(..., description="Invested capital")
+    timestamp: str = Field(..., description="Timestamp")
+    value: float = Field(..., description="Total portfolio equity")
+    cash: float = Field(..., description="Cash balance")
+    positions_value: float = Field(..., description="Invested capital")
 
-class BacktestStats(BaseModel):
+class EquityCurve(BaseModel):
+    timestamps: List[str]
+    values: List[float]
+    cash: List[float]
+    positions_value: List[float]
+
+class BacktestMetrics(BaseModel):
     """Backtest performance statistics"""
+    initial_capital: float = Field(..., description="Initial capital")
+    final_equity: float = Field(..., description="Final equity")
     total_return: float = Field(..., description="Total return percentage")
-    sharpe_ratio: float = Field(..., description="Sharpe ratio")
-    max_drawdown: float = Field(..., description="Maximum drawdown percentage")
-    win_rate: float = Field(..., description="Win rate percentage")
     total_trades: int = Field(..., description="Total number of trades")
     winning_trades: int = Field(..., description="Number of winning trades")
     losing_trades: int = Field(..., description="Number of losing trades")
+    win_rate: float = Field(..., description="Win rate percentage")
+    max_drawdown: float = Field(..., description="Maximum drawdown percentage")
+    sharpe_ratio: float = Field(..., description="Sharpe ratio")
     profit_factor: float = Field(..., description="Profit factor")
-    avg_win: float = Field(..., description="Average winning trade percentage")
-    avg_loss: float = Field(..., description="Average losing trade percentage")
-    initial_capital: float = Field(..., description="Initial capital")
-    final_equity: float = Field(..., description="Final equity")
+    avg_win: Optional[float] = Field(None, description="Average winning trade percentage")
+    avg_loss: Optional[float] = Field(None, description="Average losing trade percentage")
 
 class Backtest(BaseModel):
     """Main backtest model"""
@@ -65,8 +81,8 @@ class Backtest(BaseModel):
     data_provider: str = Field(..., description="Data provider used")
     
     # Results
-    stats: BacktestStats = Field(..., description="Performance statistics")
-    trades: List[TradeData] = Field(default_factory=list, description="Individual trades")
+    stats: BacktestMetrics = Field(..., description="Performance statistics")
+    trades: List[TradeDetail] = Field(default_factory=list, description="Individual trades")
     equity_curve: List[EquityPoint] = Field(default_factory=list, description="Equity curve data")
     
     # Metadata
@@ -88,31 +104,16 @@ class BacktestCreate(BaseModel):
     end_date: str = Field(...)
     data_provider: str = Field(default="alpaca")
 
-class BacktestResponse(BaseModel):
-    """Response model for backtest results"""
-    id: str = Field(..., description="Backtest ID")
-    user_id: str = Field(..., description="User ID")
-    strategy_id: str = Field(..., description="Strategy ID")
-    
-    # Parameters
-    initial_capital: float = Field(..., description="Initial capital")
-    timeframe: str = Field(..., description="Timeframe")
-    start_date: str = Field(..., description="Start date")
-    end_date: str = Field(..., description="End date")
-    data_provider: str = Field(..., description="Data provider")
-    
-    # Results
-    stats: BacktestStats = Field(..., description="Performance statistics")
-    trades: List[TradeData] = Field(..., description="Trades")
-    equity_curve: List[EquityPoint] = Field(..., description="Equity curve")
-    
-    # Metadata
-    status: str = Field(..., description="Status")
-    created_at: datetime = Field(..., description="Creation date")
-    updated_at: datetime = Field(..., description="Update date")
+class BacktestRunResponse(BaseModel):
+    backtest_id: str
+    message: str
 
-    class Config:
-        validate_by_name = True
+class BacktestResultResponse(BaseModel):
+    backtest_id: str
+    strategy_name: str
+    equity_curve: EquityCurve
+    trades: List[TradeDetail]
+    metrics: BacktestMetrics
 
 class BacktestSummary(BaseModel):
     """Summary model for listing backtests"""
@@ -157,6 +158,50 @@ class BacktestExecution(BaseModel):
         populate_by_name = True
         arbitrary_types_allowed = True
         json_encoders = {ObjectId: str}
+
+class BacktestStatus(BaseModel):
+    status: str
+    progress: int
+    error: Optional[str] = None
+
+class TradeDetailsData(BaseModel):
+    date: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    indicators: Dict[str, float]
+    is_signal: bool
+
+class TradeDetailsResponse(BaseModel):
+    trade: TradeDetail
+    entry_data: List[TradeDetailsData]
+    exit_data: Optional[List[TradeDetailsData]] = None
+
+class DeployRequest(BaseModel):
+    strategy_id: str
+    strategy_type: str
+    mode: str
+    initial_capital: float
+
+class DeployResponse(BaseModel):
+    success: bool
+    deployment_id: str
+    message: str
+
+class BacktestDetailedSummary(BaseModel):
+    id: str
+    strategy_id: str
+    strategy_name: str
+    start_date: str
+    end_date: str
+    created_at: datetime
+    timeframe: str
+    data_provider: str
+    equity_curve: List[EquityPoint]
+    trades: List[TradeDetail]
+    performance: BacktestMetrics
 
 class BacktestTask(BaseModel):
     """Redis-only model for background task tracking"""

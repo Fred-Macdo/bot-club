@@ -88,9 +88,9 @@ class Portfolio:
         
         equity_point = {
             'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp,
-            'value': total_portfolio_value,
-            'cash': self.cash,
-            'positions_value': positions_value
+            'value': round(total_portfolio_value, 2),
+            'cash': round(self.cash, 2),
+            'positions_value': round(positions_value, 2)
         }
         
         self.equity_history.append(equity_point)
@@ -136,7 +136,7 @@ class Portfolio:
             position = Position(
                 symbol=symbol,
                 shares=position_size,
-                entry_price=entry_price,
+                entry_price=round(entry_price, 2),
                 entry_time=timestamp,
                 entry_value=total_cost
             )
@@ -163,11 +163,11 @@ class Portfolio:
             position_id=position.position_id,
             symbol=position.symbol,
             shares=position.shares,
-            entry_price=position.entry_price,
-            exit_price=exit_price,
+            entry_price=round(position.entry_price, 2),
+            exit_price=round(exit_price, 2),
             entry_time=position.entry_time,
             exit_time=timestamp,
-            pnl=pnl,
+            pnl=round(pnl, 2),
             pnl_emoji=pnl_emoji
         )
         

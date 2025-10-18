@@ -40,28 +40,48 @@ class PerformanceCalculator:
         if equity_curve is None:
             equity_curve = self._generate_equity_curve(trades, initial_capital)
         
+        # Format trades with 2 decimal precision
+        formatted_trades = []
+        for trade in trades:
+            formatted_trade = trade.copy()
+            # Round all numeric fields to 2 decimal places
+            for key in ['entry_price', 'exit_price', 'quantity', 'pnl', 'pnl_pct', 'return_pct']:
+                if key in formatted_trade and formatted_trade[key] is not None:
+                    formatted_trade[key] = round(float(formatted_trade[key]), 2)
+            formatted_trades.append(formatted_trade)
+        
+        # Format equity curve with 2 decimal precision
+        formatted_equity_curve = []
+        for point in equity_curve:
+            formatted_point = point.copy()
+            # Round all numeric fields to 2 decimal places
+            for key in ['equity', 'cash', 'positions_value', 'trade_pnl']:
+                if key in formatted_point and formatted_point[key] is not None:
+                    formatted_point[key] = round(float(formatted_point[key]), 2)
+            formatted_equity_curve.append(formatted_point)
+        
         return BacktestResult(
             strategy_id=strategy_id,
             user_id=user_id,
-            total_return=metrics['total_return'],
-            sharpe_ratio=metrics['sharpe_ratio'],
-            max_drawdown=metrics['max_drawdown'],
-            win_rate=metrics['win_rate'],
-            total_trades=metrics['total_trades'],
-            profit_factor=metrics['profit_factor'],
-            initial_capital=initial_capital,
-            final_capital=final_capital,
+            total_return=round(metrics['total_return'], 2),
+            sharpe_ratio=round(metrics['sharpe_ratio'], 2),
+            max_drawdown=round(metrics['max_drawdown'], 2),
+            win_rate=round(metrics['win_rate'], 2),
+            total_trades=metrics['total_trades'],  # Keep as integer
+            profit_factor=round(metrics['profit_factor'], 2),
+            initial_capital=round(initial_capital, 2),
+            final_capital=round(final_capital, 2),
             start_date=start_date,
             end_date=end_date,
             timeframe=timeframe,
-            trades=trades,
-            equity_curve=equity_curve
+            trades=formatted_trades,
+            equity_curve=formatted_equity_curve
         )
     
     def _generate_equity_curve(self, trades: List[Dict], initial_capital: float) -> List[Dict[str, Any]]:
         """Generate equity curve data from trades"""
         if not trades:
-            return [{'date': datetime.utcnow().isoformat(), 'equity': initial_capital}]
+            return [{'date': datetime.utcnow().isoformat(), 'equity': round(initial_capital, 2)}]
         
         df = pd.DataFrame(trades)
         
@@ -77,8 +97,8 @@ class PerformanceCalculator:
         for i, (_, row) in enumerate(df.iterrows()):
             equity_curve.append({
                 'date': row['exit_time'].isoformat(),
-                'equity': round(equity_values.iloc[i], 2),
-                'trade_pnl': round(row['pnl'], 2)
+                'equity': round(float(equity_values.iloc[i]), 2),
+                'trade_pnl': round(float(row['pnl']), 2)
             })
         
         return equity_curve
@@ -116,10 +136,10 @@ class PerformanceCalculator:
         max_drawdown = self._calculate_max_drawdown(df, initial_capital)
         sharpe_ratio = self._calculate_sharpe_ratio(df)
         
-        # Profit factor
+        # Profit factor - use 999.99 instead of float('inf') for JSON compatibility
         gross_profit = df[df['pnl'] > 0]['pnl'].sum()
         gross_loss = abs(df[df['pnl'] < 0]['pnl'].sum())
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else 999.99
         
         return {
             'total_trades': total_trades,

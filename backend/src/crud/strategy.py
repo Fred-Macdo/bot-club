@@ -9,7 +9,12 @@ from ..models.strategy import (
     StrategyUpdate, 
     StrategyConfig,
     BacktestResult, 
-    BacktestParams
+    BacktestParams,
+    DeployedStrategy,
+    RiskManagement,
+    StatusEnum,
+    AccountTypeEnum,
+    RuntimeStrategy
 )
 from ..utils.mongo_helpers import PyObjectId
 from ..services.default_strategies import get_default_strategies_from_db
@@ -19,6 +24,9 @@ import json
 # Strategy Collection Name
 STRATEGY_COLLECTION = "strategy"
 BACKTEST_COLLECTION = "backtest_result"
+DEFAULT_STRATEGIES_COLLECTION = "default_strategies"
+RUNTIME_STRATEGIES_COLLECTION = "runtime_strategies"
+DEPLOYED_STRATEGIES_COLLECTION = "deployed_strategies"
 
 # backend/app/crud/strategy.py
 async def get_strategies_by_user_id(db: AsyncIOMotorDatabase, user_id: Union[str, PyObjectId]) -> List[Strategy]:
@@ -150,6 +158,32 @@ async def create_strategy(db: AsyncIOMotorDatabase, strategy_data: StrategyCreat
     
     strategy_dict = strategy.dict(by_alias=True)
     result = await db[STRATEGY_COLLECTION].insert_one(strategy_dict)
+
+    # Store the strategy in the deployed_strategies collection
+    deployed_strategy = DeployedStrategy(
+        user_id=user_id,
+        strategy_id=result.inserted_id,
+        strategy_name=strategy_data.name,
+        created_at=datetime.utcnow(),
+        status=StatusEnum.INACTIVE,
+        account_type=AccountTypeEnum.PAPER
+    )
+    await db[DEPLOYED_STRATEGIES_COLLECTION].insert_one(deployed_strategy)
+
+    # Store the strategy in the runtime_strategies collection
+    runtime_strategy = RuntimeStrategy(
+        user_id=user_id,
+        strategy_id=result.inserted_id,
+        strategy_name=strategy_data.name,
+        created_at=datetime.utcnow(),
+        current_capital=0,
+        current_positions=[],
+        performance_metrics={},
+        error_logs=[],
+        last_execution_time=None,
+        last_update_time=None
+    )
+    await db[RUNTIME_STRATEGIES_COLLECTION].insert_one(runtime_strategy)
     
     # Return the created strategy with the new ID
     strategy.id = result.inserted_id

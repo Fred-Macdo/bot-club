@@ -55,9 +55,9 @@ const Backtest = () => {
   const [selectedStrategy, setSelectedStrategy] = useState('');
   const [backtestConfig, setBacktestConfig] = useState({
     initial_capital: 100000,
-    timeframe: '1d',
-    start_date: '2023-01-01',
-    end_date: '2023-12-31',
+    timeframe: '1D',
+    start_date: '2025-01-01',
+    end_date: '2025-05-31',
     data_provider: 'alpaca'
   });
   
@@ -140,9 +140,18 @@ const Backtest = () => {
       console.log('Default strategies with IDs:', defaultStrategiesWithIds); // This state is no longer needed
       console.log('Selected strategy type:', typeof selectedStrategy);
       console.log('Strategy ID for backtest request:', selectedStrategy);
-      
+
+      // Find the full strategy object to get its type
+      const strategyDetails = availableStrategies.find(s => s.id === selectedStrategy);
+      if (!strategyDetails) {
+        setError("Could not find details for the selected strategy.");
+        setLoading(false);
+        return;
+      }
+
       await backtestApi.runBacktest({
         strategy_id: selectedStrategy,
+        strategy_type: strategyDetails.type, // Add strategy type here
         ...backtestConfig
       });
       
@@ -287,12 +296,18 @@ const Backtest = () => {
                   }))}
                   helperText=" "
                 >
-                  <MenuItem value="1m">1 Minute</MenuItem>
-                  <MenuItem value="5m">5 Minutes</MenuItem>
-                  <MenuItem value="15m">15 Minutes</MenuItem>
-                  <MenuItem value="1h">1 Hour</MenuItem>
-                  <MenuItem value="1d">1 Day</MenuItem>
-                  <MenuItem value="1w">1 Week</MenuItem>
+                  <MenuItem value="1M">1 Minute</MenuItem>
+                  <MenuItem value="5M">5 Minutes</MenuItem>
+                  <MenuItem value="15M">15 Minutes</MenuItem>
+                  <MenuItem value="30M">30 Minutes</MenuItem>
+                  <MenuItem value="1H">1 Hour</MenuItem>
+                  <MenuItem value="4H">4 Hours</MenuItem>
+                  <MenuItem value="1D">1 Day</MenuItem>
+                  <MenuItem value="2D">2 Days</MenuItem>
+                  <MenuItem value="1W">1 Week</MenuItem>
+                  <MenuItem value="2W">2 Weeks</MenuItem>
+                  <MenuItem value="1MO">1 Month</MenuItem>
+                  <MenuItem value="3MO">3 Months</MenuItem>
                 </TextField>
               </Grid>
               

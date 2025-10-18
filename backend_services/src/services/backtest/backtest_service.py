@@ -126,7 +126,7 @@ class BacktestService:
             
             # Run the backtest using the engine
             result = await self.backtest_engine.run(backtest_params)
- 
+            #logger.info(f"Backtest Service DEBUG: Backtest Result: {type(result)}", "Number of Trades: ", f"{len(result.trades)}")
             # Save results
             await self.db['backtests'].insert_one(result.model_dump())
             

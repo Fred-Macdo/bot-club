@@ -5,11 +5,27 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 import uuid
 import asyncio
+import httpx
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
+import json
 import logging
 from ..database.client import get_db
-from ..models.backtest import BacktestParams, BacktestResponse, BacktestSummary
+from ..models.backtest import (
+    BacktestRunRequest,
+    BacktestRunResponse,
+    BacktestStatus,
+    TradeDetail,
+    EquityCurve,
+    BacktestMetrics,
+    BacktestResultResponse,
+    TradeDetailsData,
+    TradeDetailsResponse,
+    DeployRequest,
+    DeployResponse,
+    BacktestSummary,
+    BacktestDetailedSummary
+)
 from ..models.strategy import Strategy
 from ..models.user import UserInDB
 from ..dependencies import get_current_user_from_token
@@ -18,89 +34,6 @@ from ..services.default_strategies import get_default_strategies_from_db
 
 router = APIRouter(tags=["backtest"])
 logger = logging.getLogger(__name__)
-
-# Pydantic models for request/response
-class BacktestRunRequest(BaseModel):
-    strategy_id: str
-    strategy_type: str  # 'default' or 'user'
-    initial_capital: float
-    timeframe: str
-    start_date: str
-    end_date: str
-    data_provider: str
-
-class BacktestRunResponse(BaseModel):
-    backtest_id: str
-    message: str
-
-class BacktestStatus(BaseModel):
-    status: str  # 'running', 'completed', 'failed'
-    progress: int  # 0-100
-    error: Optional[str] = None
-
-class TradeDetail(BaseModel):
-    id: Optional[int] = None
-    position_id: Optional[str] = None
-    symbol: str
-    side: str
-    entry_date: datetime
-    entry_price: float
-    exit_date: Optional[datetime]
-    exit_price: Optional[float]
-    quantity: float
-    pnl: float
-    return_pct: float
-
-class EquityCurve(BaseModel):
-    timestamps: List[str]
-    values: List[float]
-    cash: List[float]
-    positions_value: List[float]
-
-class BacktestMetrics(BaseModel):
-    initial_capital: float
-    final_equity: float
-    total_return: float
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
-    win_rate: float
-    max_drawdown: float
-    sharpe_ratio: float
-    profit_factor: float
-
-class BacktestResultResponse(BaseModel):
-    backtest_id: str
-    strategy_name: str
-    equity_curve: EquityCurve
-    trades: List[TradeDetail]
-    metrics: BacktestMetrics
-
-class TradeDetailsData(BaseModel):
-    date: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-    indicators: Dict[str, float]
-    is_signal: bool
-
-class TradeDetailsResponse(BaseModel):
-    trade: TradeDetail
-    entry_data: List[TradeDetailsData]
-    exit_data: Optional[List[TradeDetailsData]] = None
-
-class DeployRequest(BaseModel):
-    strategy_id: str
-    strategy_type: str
-    mode: str  # 'paper' or 'live'
-    initial_capital: float
-
-class DeployResponse(BaseModel):
-    success: bool
-    deployment_id: str
-    message: str
 
 # Async backtest execution
 async def run_backtest_async(
@@ -125,8 +58,6 @@ async def run_backtest_async(
         
         # Call backend services to run the backtest
         try:
-            import requests
-            
             backend_services_url = "http://backend_services:8001"  # Docker service name
             backtest_payload = {
                 "strategy_id": str(strategy_config.get('_id', strategy_config.get('id', ''))),
@@ -140,10 +71,12 @@ async def run_backtest_async(
             
             print(f"Calling backend_services with payload: {backtest_payload}")
             
-            response = requests.post(
-                f"{backend_services_url}/backtest/run",
-                json=backtest_payload
-            )
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{backend_services_url}/backtest/run",
+                    json=backtest_payload,
+                    timeout=300 # Backtests can take a while
+                )
             
             if response.status_code == 200:
                 # Backend services will handle the execution
@@ -158,6 +91,8 @@ async def run_backtest_async(
             else:
                 raise Exception(f"Backend services error: {response.text}")
                 
+        except httpx.RequestError as e:
+            raise Exception(f"Error calling backend_services: {e}")
         except ImportError:
             # Fallback to mock implementation if requests is not available
             print("Warning: requests module not available, using mock implementation")
@@ -165,25 +100,6 @@ async def run_backtest_async(
             # Simulate backtest execution
             await asyncio.sleep(1)  # Simulate processing time
             
-            # Create mock results
-            results = {
-                "stats": {
-                    "final_equity": initial_capital * 1.1,  # 10% return
-                    "total_return_pct": 10.0,
-                    "max_drawdown": -0.05,
-                    "sharpe_ratio": 1.2,
-                    "win_rate": 0.6,
-                    "profit_factor": 1.5,
-                    "total_trades": 10,
-                    "winning_trades": 6,
-                    "losing_trades": 4
-                },
-                "equity_curve": [
-                    {"timestamp": start_date, "value": initial_capital, "cash": initial_capital, "positions_value": 0},
-                    {"timestamp": end_date, "value": initial_capital * 1.1, "cash": initial_capital * 0.2, "positions_value": initial_capital * 0.9}
-                ],
-                "trades": []
-            }
             
             # Update status to completed
             await redis_client.hset(f"backtest:{backtest_id}", mapping={
@@ -244,7 +160,24 @@ async def run_backtest(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-    """Start a new backtest"""
+    """
+    Starts a new backtest run.
+
+    This endpoint initiates a backtest asynchronously. It validates the request,
+    loads the specified strategy, and schedules the backtest to run in the
+    background.
+
+    Args:
+        request: The backtest run request containing parameters like strategy_id,
+                 capital, timeframe, start/end dates, and data provider.
+        background_tasks: FastAPI's background tasks manager to run the backtest
+                          process asynchronously.
+        current_user: The authenticated user initiating the backtest.
+        db: The database connection instance.
+
+    Returns:
+        A response containing the unique backtest_id and a confirmation message.
+    """
     # Validate dates
     try:
         start = datetime.strptime(request.start_date, '%Y-%m-%d')
@@ -309,7 +242,20 @@ async def get_backtest_status(
     backtest_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token)
 ):
-    """Get the status of a running backtest"""
+    """
+    Retrieves the status of a specific backtest.
+
+    This endpoint polls the status of a backtest run using its ID,
+    returning the current state (e.g., running, completed, failed)
+    and progress.
+
+    Args:
+        backtest_id: The unique identifier of the backtest.
+        current_user: The authenticated user who owns the backtest.
+
+    Returns:
+        The current status of the backtest, including progress and any errors.
+    """
     # Get status from Redis
     data = await redis_client.hgetall(f"backtest:{backtest_id}")
     
@@ -332,7 +278,18 @@ async def get_backtest_results(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-    """Get the results of a completed backtest"""
+    """
+    Fetches the detailed results of a completed backtest.
+
+    Args:
+        backtest_id: The unique identifier of the backtest.
+        current_user: The authenticated user who owns the backtest.
+        db: The database connection instance.
+
+    Returns:
+        A detailed response containing the backtest results, including
+        equity curve, trade list, and performance metrics.
+    """
     # Fetch backtest from database
     backtest = await db.backtests.find_one({
         "id": backtest_id,
@@ -395,7 +352,22 @@ async def get_trade_details(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-    """Get detailed OHLCV and indicator data for a specific trade"""
+    """
+    Retrieves detailed information for a single trade within a backtest.
+
+    This includes OHLCV data and indicator values around the time the
+    trade was executed, providing context for the trading decision.
+
+    Args:
+        backtest_id: The identifier of the backtest the trade belongs to.
+        trade_id: The identifier of the specific trade.
+        current_user: The authenticated user who owns the backtest.
+        db: The database connection instance.
+
+    Returns:
+        Detailed data for the specified trade, including market data and
+        indicators.
+    """
     # Verify backtest ownership
     backtest = await db.backtest_results.find_one({
         "id": backtest_id,
@@ -476,7 +448,22 @@ async def deploy_strategy(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-    """Deploy a strategy to live or paper trading"""
+    """
+    Deploys a trading strategy for live or paper trading.
+
+    This endpoint takes a strategy configuration and deploys it, creating a
+    record of the deployment and preparing it for execution in the
+    specified trading mode.
+
+    Args:
+        request: The deployment request, including the strategy ID, trading mode,
+                 and initial capital.
+        current_user: The authenticated user deploying the strategy.
+        db: The database connection instance.
+
+    Returns:
+        A confirmation response with the new deployment ID.
+    """
     # Load strategy configuration
     if request.strategy_type == 'default':
         default_strategies = await get_default_strategies_from_db(db)
@@ -534,7 +521,20 @@ async def get_user_data_providers(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-    """Get available data providers for the current user"""
+    """
+    Fetches the list of available data providers for the authenticated user.
+
+    It checks for configured API keys to determine which data sources
+    (e.g., Alpaca, Polygon) are available for the user to select from when
+    running a backtest.
+
+    Args:
+        current_user: The authenticated user.
+        db: The database connection instance.
+
+    Returns:
+        A list of available data provider names.
+    """
     providers = ['yahoo']  # Yahoo is always available
     
     # Check for configured API keys
@@ -556,24 +556,39 @@ async def get_user_backtests_root(
     db: AsyncIOMotorDatabase = Depends(get_db),
     current_user: UserInDB = Depends(get_current_user_from_token)
 ):
-    """Get backtests for the current user (root endpoint)"""
+    """
+    Retrieves a summary list of all backtests for the current user.
+
+    This is the root endpoint for the backtest API and provides a high-level
+    overview of each backtest, including key performance metrics.
+
+    Args:
+        db: The database connection instance.
+        current_user: The authenticated user.
+
+    Returns:
+        A list of backtest summaries.
+    """
     backtests_cursor = db.backtests.find({"user_id": current_user.id})
     backtests = await backtests_cursor.to_list(length=None)
     
-    return [
-        BacktestSummary(
+    summaries = []
+    for backtest in backtests:
+        stats = backtest.get("stats", {})
+        summary = BacktestSummary(
             id=str(backtest["_id"]),
             strategy_id=str(backtest.get("strategy_id", "")),
             strategy_name=backtest.get("strategy_name", ""),
-            total_return=backtest.get("total_return", 0),
-            sharpe_ratio=backtest.get("sharpe_ratio", 0),
-            max_drawdown=backtest.get("max_drawdown", 0),
-            total_trades=backtest.get("total_trades", 0),
+            total_return=stats.get("total_return_pct", stats.get("total_return", 0)),
+            sharpe_ratio=stats.get("sharpe_ratio", 0),
+            max_drawdown=stats.get("max_drawdown", 0),
+            total_trades=stats.get("total_trades", 0),
             start_date=backtest.get("start_date", ""),
             end_date=backtest.get("end_date", ""),
             created_at=backtest.get("created_at", datetime.utcnow())
-        ) for backtest in backtests
-    ]
+        )
+        summaries.append(summary)
+    return summaries
 
 class EquityPoint(BaseModel):
     timestamp: str
@@ -581,30 +596,28 @@ class EquityPoint(BaseModel):
     cash: float
     positions_value: float
 
-class BacktestDetailedSummary(BaseModel):
-    id: str
-    strategy_id: str
-    strategy_name: str
-    start_date: str
-    end_date: str
-    created_at: datetime
-    # Add backtest parameters
-    timeframe: str
-    data_provider: str
-    # Add detailed fields
-    equity_curve: List[EquityPoint]
-    trades: List[TradeDetail]
-    performance: BacktestMetrics
-
 
 # Update the get_user_backtests_detailed endpoint to handle the actual MongoDB structure
 
-@router.get("/user", response_model=List[BacktestDetailedSummary])
+@router.get("/user", response_model=None)
 async def get_user_backtests(
     db: AsyncIOMotorDatabase = Depends(get_db),
     current_user: UserInDB = Depends(get_current_user_from_token)
 ):
-    """Get detailed backtests for the current user with equity curve and trades"""
+    """
+    Retrieves detailed results for all backtests belonging to the current user.
+
+    This endpoint provides a comprehensive view of each backtest, including
+    the full equity curve, a list of all trades, and detailed performance
+    metrics.
+
+    Args:
+        db: The database connection instance.
+        current_user: The authenticated user.
+
+    Returns:
+        A list of BacktestResultResponse objects.
+    """
     try:
         # Get all backtests for the user from the backtests collection
         backtests_cursor = db.backtests.find({"user_id": current_user.id})
@@ -614,14 +627,12 @@ async def get_user_backtests(
             logger.info(f"No backtests found for user_id: {current_user.id}")
             return []
 
-        detailed_backtests = []
+        backtest_responses = []
         
         for backtest in backtests:
             backtest_id = str(backtest["_id"])
             
-            # Fetch trades for this backtest from the trades collection, using ObjectId
-            trades_cursor = db.trades.find({"backtest_id": backtest["_id"]})
-            trades = await trades_cursor.to_list(length=None)
+            trades = backtest.get("trades", [])
             
             # Get strategy name - try different possible field names
             strategy_id_obj = backtest.get("strategy_id")
@@ -656,46 +667,58 @@ async def get_user_backtests(
                     return_pct=trade.get("return_pct", trade.get("pnl_pct", 0))
                 ))
             
-            # Handle equity curve
+            # Handle equity curve - convert to EquityCurve format
             equity_curve_data = backtest.get("equity_curve", [])
-            equity_points = [EquityPoint(**point) for point in equity_curve_data if isinstance(point, dict)]
+            
+            # Convert equity curve data to separate lists for EquityCurve
+            timestamps = []
+            values = []
+            cash = []
+            positions_value = []
+            
+            for point in equity_curve_data:
+                if isinstance(point, dict):
+                    # Handle format from portfolio manager (has timestamp, value, cash, positions_value)
+                    if 'timestamp' in point and 'value' in point:
+                        timestamps.append(point['timestamp'])
+                        values.append(point['value'])
+                        cash.append(point.get('cash', 0))
+                        positions_value.append(point.get('positions_value', 0))
 
-            # Performance metrics
-            stats = backtest.get("stats", {})
-            initial_capital = backtest.get("initial_capital", 100000.0)
-
+            # Create EquityCurve object
+            equity_curve = EquityCurve(
+                timestamps=timestamps,
+                values=values,
+                cash=cash,
+                positions_value=positions_value
+            )
+            
             # Calculate winning/losing trades from actual trades data for accuracy
             winning_trades = len([t for t in trades if t.get("pnl", 0) > 0])
             losing_trades = len([t for t in trades if t.get("pnl", 0) <= 0])
 
             performance = BacktestMetrics(
-                initial_capital=initial_capital,
-                final_equity=stats.get("final_equity", initial_capital),
-                total_return=stats.get("total_return_pct", stats.get("total_return", 0)),
-                total_trades=stats.get("total_trades", len(trades)),
-                winning_trades=stats.get("winning_trades", winning_trades),
-                losing_trades=stats.get("losing_trades", losing_trades),
-                win_rate=stats.get("win_rate", 0),
-                max_drawdown=stats.get("max_drawdown", 0),
-                sharpe_ratio=stats.get("sharpe_ratio", 0),
-                profit_factor=stats.get("profit_factor", 0)
+                initial_capital=backtest.get("initial_capital", 100000.0),
+                final_equity=backtest.get("final_capital", 100000.0),
+                total_return=backtest.get("total_return", 0),
+                total_trades=backtest.get("total_trades", len(trades)),
+                winning_trades=winning_trades,
+                losing_trades=losing_trades,
+                win_rate=backtest.get("win_rate", 0),
+                max_drawdown=backtest.get("max_drawdown", 0),
+                sharpe_ratio=backtest.get("sharpe_ratio", 0),
+                profit_factor=backtest.get("profit_factor", 0)
             )
             
-            detailed_backtests.append(BacktestDetailedSummary(
-                id=backtest_id,
-                strategy_id=str(strategy_id_obj) if strategy_id_obj else "",
+            backtest_responses.append(BacktestResultResponse(
+                backtest_id=backtest_id,
                 strategy_name=strategy_name,
-                start_date=backtest.get("start_date", ""),
-                end_date=backtest.get("end_date", ""),
-                created_at=backtest.get("created_at", datetime.utcnow()),
-                timeframe=backtest.get("timeframe", ""),
-                data_provider=backtest.get("data_provider", ""),
-                equity_curve=equity_points,
+                equity_curve=json.loads(equity_curve.model_dump_json()),
                 trades=trade_details,
-                performance=performance
+                metrics=performance
             ))
         
-        return detailed_backtests
+        return backtest_responses
         
     except Exception as e:
         logger.error(f"Error fetching user backtests: {e}", exc_info=True)

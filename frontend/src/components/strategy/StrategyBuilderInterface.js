@@ -1168,7 +1168,7 @@ ${strategyConfig.indicators.map(indicator =>
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Strategy Configuration (YAML)</DialogTitle>
+        <DialogTitle>Strategy Configuration</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth

@@ -17,10 +17,9 @@ logger = logging.getLogger(__name__)
 class StrategyExecutor:
     """Handles strategy execution logic"""
     
-    def __init__(self, db, user_id: str, mode: TradingMode = TradingMode.BACKTEST):
+    def __init__(self, db, user_id: str):
         self.db = db
         self.user_id = user_id
-        self.mode = mode
         self.condition_checker = ConditionChecker()
         self.indicator_converter = IndicatorConverter()
         self.trade_logger = TradeLogger()
@@ -108,10 +107,10 @@ class StrategyExecutor:
                             symbol=trade.symbol,
                             entry_time=trade.entry_time,
                             exit_time=trade.exit_time,
-                            entry_price=trade.entry_price,
-                            exit_price=trade.exit_price,
+                            entry_price=round(trade.entry_price, 2),
+                            exit_price=round(trade.exit_price, 2),
                             quantity=trade.shares,
-                            pnl=trade.pnl,
+                            pnl=round(trade.pnl, 2),    
                             trade_type=trade.trade_type,
                             strategy_name=strategy_name,
                             exit_reason=exit_reason
@@ -131,9 +130,6 @@ class StrategyExecutor:
                 )
                 
                 if can_add_position:
-                    logger.info(f"Strategy Executor DEBUG: Entry Conditions: {entry_conditions}, Row: {row_dict}, Symbol: {symbol}, Symbol DF Shape: {symbol_df.shape}")
-                    logger.info(f"Strategy Executor DEBUG: Current positions for {symbol}: {current_position_count}, Can add: {can_add_position}")
-                    
 
                     should_enter, entry_reason, data_context = self.condition_checker.check_entry_conditions(
                         conditions=entry_conditions,
@@ -158,7 +154,7 @@ class StrategyExecutor:
                             self.trade_logger.log_entry_signal(
                                 symbol,
                                 current_datetime,
-                                current_price,
+                                round(current_price, 2),
                                 strategy_name,
                                 conditions_met=[entry_reason]
                             )
@@ -201,10 +197,10 @@ class StrategyExecutor:
                                     symbol=trade.symbol,
                                     entry_time=trade.entry_time,
                                     exit_time=trade.exit_time,
-                                    entry_price=trade.entry_price,
-                                    exit_price=trade.exit_price,
+                                    entry_price=round(trade.entry_price, 2),
+                                    exit_price=round(trade.exit_price, 2),
                                     quantity=trade.shares,
-                                    pnl=trade.pnl,
+                                    pnl=round(trade.pnl, 2),
                                     trade_type=trade.trade_type,
                                     strategy_name=strategy_name,
                                     exit_reason="end_of_period"
@@ -218,6 +214,8 @@ class StrategyExecutor:
     def _calculate_indicators(self, data: pl.DataFrame, config: Dict, symbols: List[str]) -> Dict[str, pl.DataFrame]:
         """Calculate indicators for each symbol"""
         symbol_data = {}
+        logger.info(f"Strategy Executor.calculate_indicators: Calculating indicators for {len(symbols)} symbols")
+        logger.info(f"Strategy Executor.calculate_indicators: DF Head : {data.head(3)}")
         for symbol in symbols:
             symbol_df = data.filter(pl.col("symbol") == symbol)
             if len(symbol_df) > 0:

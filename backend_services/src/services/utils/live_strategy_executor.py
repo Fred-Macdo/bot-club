@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from math import log
 from typing import Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -7,16 +8,17 @@ from decimal import Decimal
 import polars as pl
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from ..data_retrieval.data_manager import DataManager
+from ..data_retrieval.data_manager import DataManager, TIMEFRAME_MAPPINGS
 from ..indicators.indicator_factory import IndicatorFactory
-from ..trading.alpaca_trading_service import AlpacaPortfolioManager
+from ...models.portfolio_models import StrategyPortfolio
 from ..utils.condition_checker import ConditionChecker
 from ..utils.enums import TradingMode
 from ..utils.indicator_converter import IndicatorConverter
 from ..utils.trade_logger import TradeLogger
 from ..utils.websocket_manager import WebSocketLogHandler
-
+from alpaca.trading.client import TradeClient
 logger = logging.getLogger(__name__)
+
 
 
 class LiveStrategyExecutor:
@@ -51,10 +53,11 @@ class LiveStrategyExecutor:
 
     async def start(self):
         """Starts the live strategy execution loop."""
-        self.portfolio_manager = await self._get_portfolio_manager()
+        self.alpaca_client = await self._get_portfolio_manager()
         self.is_running = True
         self._stop_event.clear()
         config = self.strategy.get("strategy_config") or self.strategy.get("yaml_config") or self.strategy.get("config")
+        logger.info(f"Live strategy configuration: {config}")
         if not config:
             raise ValueError("No strategy configuration found")
 
@@ -62,18 +65,23 @@ class LiveStrategyExecutor:
         timeframe = config.get("timeframe", "15Min")  # Default to 15 minutes
         
         data_manager = DataManager(self.db)
-        
+        logger.info(f"Data manager initialized: {data_manager.data_provider}")
         # Initialize the data provider - THIS WAS MISSING!
         await data_manager.initialize_provider(self.data_provider, self.user_id)
 
+        logger.info(f"Data manager initialized: {data_manager}")
         while not self._stop_event.is_set():
             try:
                 self.logger.info("Fetching new market data...")
                 
                 # We need enough data to calculate indicators, so we fetch a range.
                 # A lookback of 100 periods should be sufficient for most indicators.
-                market_data = await data_manager.fetch_data(symbols, timeframe, limit=100, data_provider=self.data_provider)
-
+                market_data = await data_manager.fetch_data(symbols,
+                                                            timeframe,
+                                                            limit=25, 
+                                                            data_provider=self.data_provider)
+                
+                self.logger.info(f"Market data fetched: {market_data}")
                 if market_data.is_empty():
                     self.logger.warning("No market data fetched. Waiting for next interval.")
                     await asyncio.sleep(self._get_sleep_duration(timeframe))
@@ -198,7 +206,8 @@ class LiveStrategyExecutor:
                 "mode": self.mode.value,
                 "timestamp": {"$gt": last_exit_time}
             })
-
+            logger.info(f"LIVE STRATEGY EXECUTOR: Current entry count for {symbol}: {current_entry_count}")
+            logger.info(f"LIVE STRATEGY EXECUTOR: Max positions : {max_positions}")
             if current_entry_count >= max_positions:
                 self.logger.info(f"DCA max positions ({max_positions}) reached for {symbol}. No new entry.")
                 return
@@ -286,8 +295,4 @@ class LiveStrategyExecutor:
                 self.logger.warning(f"Could not decrypt secret key, using as-is: {e}")
                 decrypted_secret = secret_key
 
-        return AlpacaPortfolioManager(api_key=decrypted_api_key, 
-                                      secret_key=decrypted_secret,
-                                      db=self.db,
-                                      user_id=self.user_id,
-                                      mode=self.mode)
+        return TradeClient(api_key=decrypted_api_key, secret_key=decrypted_secret)

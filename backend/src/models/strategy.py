@@ -1,5 +1,6 @@
 from datetime import datetime
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Literal
+from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 from bson import ObjectId
 from ..utils.mongo_helpers import PyObjectId
@@ -172,3 +173,39 @@ class BacktestResponse(BaseModel):
 
     class Config:
         validate_by_name = True
+
+class RuntimeStrategy(BaseModel):
+    """Runtime strategy model for deployed strategies"""
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    user_id: PyObjectId = Field(..., description="User who owns this strategy")
+    strategy_id: PyObjectId = Field(..., description="Strategy that was deployed")
+    strategy_name: str = Field(..., description="Name of the strategy")
+    current_capital: float = Field(..., description="Current capital")
+    current_positions: List[Dict[str, Any]] = Field(..., description="Current positions")
+    performance_metrics: Dict[str, Any] = Field(..., description="Performance metrics")
+    error_logs: List[Dict[str, Any]] = Field(..., description="Error logs")
+    last_execution_time: datetime = Field(..., description="Last execution time")
+    last_update_time: datetime = Field(..., description="Last update time")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+#########################################################
+################### Deployed Strategy ###################
+#########################################################
+
+class StatusEnum(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+class AccountTypeEnum(str, Enum):
+    LIVE = "live"
+    PAPER = "paper"
+
+class DeployedStrategy(BaseModel):
+    """Deployed strategy model for deployed strategies"""
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    user_id: PyObjectId = Field(..., description="User who owns this strategy")
+    strategy_id: PyObjectId = Field(..., description="Strategy that was deployed")
+    strategy_name: str = Field(..., description="Name of the strategy")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: StatusEnum = Field(default=StatusEnum.INACTIVE, description="Status of the strategy")
+    account_type: AccountTypeEnum = Field(default=AccountTypeEnum.PAPER, description="Account type")

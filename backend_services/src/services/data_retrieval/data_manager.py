@@ -17,7 +17,10 @@ class DataManager:
         self.db = db
         self.data_cache = {}
         self.data_provider = None
-    
+
+    def __str__(self):
+        return f"DataManager(data_provider={self.data_provider})"
+        
     async def initialize_provider(self, 
                                   data_provider_name: str, 
                                   user_id: str,
@@ -38,8 +41,8 @@ class DataManager:
                     return
                 
                 # Get API keys from user config
-                api_key = user_config.get('alpaca_paper_api_key') or user_config.get('alpaca_live_api_key')
-                secret_key = user_config.get('alpaca_paper_secret_key') or user_config.get('alpaca_live_secret_key')
+                api_key = user_config.get('alpaca_live_api_key') or user_config.get('alpaca_paper_api_key')
+                secret_key = user_config.get('alpaca_live_secret_key') or user_config.get('alpaca_paper_secret_key')
                 
                 if api_key and secret_key:
                     # Decrypt secret key if needed
@@ -94,6 +97,81 @@ class DataManager:
             logger.error(f"Error initializing data provider: {e}, falling back to Yahoo Finance")
             self.data_provider = DataProviderFactory.get_provider('yahoo')
     
+    async def _fetch_alpaca_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+        data = await self.data_provider.get_historical_data(
+            symbols=symbols,
+            start_date=start_dt,
+            end_date=end_dt,
+            timeframe=timeframe.strip()
+        )
+        #logger.info(f"Retrieved data for {symbols}: {data.to_dicts()}")
+        #logger.info(f"Retrieved {data.height} data points for {symbols}")
+        return [data]
+
+    async def _fetch_yahoo_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+        all_data = []
+        for symbol in symbols:
+            try:
+                data = await self.data_provider.get_historical_data(
+                    symbol=symbol,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    timeframe=timeframe.strip()
+                )
+                
+                if isinstance(data, pl.DataFrame) and data.height > 0:
+                    if 'symbol' not in data.columns:
+                        data = data.with_columns(pl.lit(symbol).alias("symbol"))
+                    #logger.info(f"Retrieved data for {symbol}: {data.to_dicts()}")
+                    all_data.append(data)
+                    #logger.info(f"Retrieved {data.height} data points for {symbol}")
+                elif hasattr(data, 'empty') and not data.empty:
+                    polars_data = pl.from_pandas(data.reset_index())
+                    if 'symbol' not in polars_data.columns:
+                        polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
+                    #logger.info(f"Retrieved data for {symbol}: {polars_data.to_dicts()}")
+                    all_data.append(polars_data)
+                    #logger.info(f"Retrieved {len(data)} data points for {symbol}")
+                else:
+                    logger.warning(f"No data retrieved for {symbol}")
+                    
+            except Exception as e:
+                logger.error(f"Error fetching data for {symbol}: {e}")
+                continue
+        return all_data
+
+    async def _fetch_polygon_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+        all_data = []
+        for symbol in symbols:
+            try:
+                data = await self.data_provider.get_historical_data(
+                    symbol=symbol,
+                    start_date=start_dt.strftime('%Y-%m-%d'),
+                    end_date=end_dt.strftime('%Y-%m-%d'),
+                    timeframe=timeframe.strip()
+                )
+                
+                if isinstance(data, pl.DataFrame) and data.height > 0:
+                    if 'symbol' not in data.columns:
+                        data = data.with_columns(pl.lit(symbol).alias("symbol"))
+                    #   logger.info(f"Retrieved data for {symbol}: {data.to_dicts()}")
+                    all_data.append(data)
+                    #logger.info(f"Retrieved {data.height} data points for {symbol}")
+                elif hasattr(data, 'empty') and not data.empty:
+                    polars_data = pl.from_pandas(data.reset_index())
+                    if 'symbol' not in polars_data.columns:
+                        polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
+                    #logger.info(f"Retrieved data for {symbol}: {polars_data.to_dicts()}")
+                    all_data.append(polars_data)
+                    #logger.info(f"Retrieved {len(data)} data points for {symbol}")
+                else:
+                    logger.warning(f"No data retrieved for {symbol}")
+                    
+            except Exception as e:
+                logger.error(f"Error fetching data for {symbol}: {e}")
+                continue
+        return all_data
+
     def _convert_to_datetime(self, date_str: str) -> datetime:
         """Convert date string to datetime object"""
         try:
@@ -149,30 +227,30 @@ class DataManager:
     
     def _calculate_lookback_days(self, timeframe: str, limit: int) -> int:
         """Calculate how many days to look back to get enough data points"""
-        timeframe_upper = timeframe.upper()
+        timeframe
         
-        if timeframe_upper in ['1M', '2M', '5M', '15M', '30M']:
+        if timeframe in ['1Min', '2Min', '5Min', '15Min', '30Min']:
             # For minute data, assume 6.5 trading hours per day (390 minutes)
-            minutes_per_timeframe = int(timeframe_upper.replace('M', ''))
+            minutes_per_timeframe = int(timeframe.replace('Min', ''))
             points_per_day = 390 / minutes_per_timeframe
             days_needed = max(1, int(limit / points_per_day))
             return days_needed * 2  # Buffer for weekends and holidays
             
-        elif timeframe_upper in ['1H', '60M']:
+        elif timeframe in ['1Hour', '60Min']:
             # For hourly data, assume 6.5 trading hours per day
             points_per_day = 6.5
             days_needed = max(1, int(limit / points_per_day))
             return days_needed * 2
             
-        elif timeframe_upper in ['1D', '1DAY']:
+        elif timeframe in ['1D', '1DAY']: 
             # For daily data, 1 point per trading day
             return limit * 2  # Buffer for weekends and holidays
             
-        elif timeframe_upper in ['1W', '1WK', '1WEEK']:
+        elif timeframe in ['1W', '1WK', '1WEEK']:
             # For weekly data
             return limit * 10  # About 10 days per week including weekends
             
-        elif timeframe_upper in ['1MO', '1MONTH']:
+        elif timeframe in ['1MO', '1MONTH']:
             # For monthly data
             return limit * 35  # About 35 days per month
             
@@ -185,130 +263,36 @@ class DataManager:
         if not self.data_provider:
             raise ValueError("Data provider not initialized. Call initialize_provider() first.")
         
-        cache_key = f"{'-'.join(symbols)}_{start_date}_{end_date}_{timeframe}_{self.data_provider.get_provider_name()}"
+        
+        provider_name = self.data_provider.get_provider_name().lower()
+        cache_key = f"{'-'.join(symbols)}_{start_date}_{end_date}_{timeframe}_{provider_name}"
         
         if cache_key in self.data_cache:
             logger.info(f"Using cached data for {symbols}")
             return self.data_cache[cache_key]
         
-        logger.info(f"Fetching data for {symbols} from {start_date} to {end_date} using {self.data_provider.get_provider_name()}")
+        logger.info(f"Fetching data for {symbols} from {start_date} to {end_date} using {provider_name}")
         
         try:
-            if type(start_date) == str:
-                start_dt = self._convert_to_datetime(start_date)
-            else:
-                start_dt = start_date
-            if type(end_date) == str:
-                end_dt = self._convert_to_datetime(end_date)
-            else:
-                end_dt = end_date
+            start_dt = self._convert_to_datetime(start_date) if isinstance(start_date, str) else start_date
+            end_dt = self._convert_to_datetime(end_date) if isinstance(end_date, str) else end_date
             
             all_data = []
-            
-            # Handle different providers differently
-            provider_name = self.data_provider.get_provider_name().lower()
-            
-            if provider_name == 'alpaca':
-                data = await self.data_provider.get_historical_data(
-                    symbols=symbols,
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    timeframe=timeframe
-                )
-                all_data.append(data)
-                logger.info(f"Retrieved {data.height} data points for {symbols}")
-            elif provider_name == 'yahoo':
-                # Yahoo Finance - fetch data symbol by symbol
-                for symbol in symbols:
-                    try:
-                        data = await self.data_provider.get_historical_data(
-                            symbol=symbol,
-                            start_date=start_dt,
-                            end_date=end_dt,
-                            timeframe=timeframe
-                        )
-                        
-                        if isinstance(data, pl.DataFrame) and data.height > 0:
-                            # Add symbol column if it doesn't exist
-                            if 'symbol' not in data.columns:
-                                data = data.with_columns(pl.lit(symbol).alias("symbol"))
-                            all_data.append(data)
-                            logger.info(f"Retrieved {data.height} data points for {symbol}")
-                        elif hasattr(data, 'empty') and not data.empty:
-                            # Handle pandas DataFrame
-                            polars_data = pl.from_pandas(data.reset_index())
-                            if 'symbol' not in polars_data.columns:
-                                polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
-                            all_data.append(polars_data)
-                            logger.info(f"Retrieved {len(data)} data points for {symbol}")
-                        else:
-                            logger.warning(f"No data retrieved for {symbol}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error fetching data for {symbol}: {e}")
-                        continue
-            
-            elif provider_name == 'polygon':
-                crypto_symbols = ["X:" + s.upper() + 'USD' for s in symbols if s.upper() in AVAILABLE_CRYPTO_ASSETS]
-                logger.info(f"DEBUG: DATA_MANAGER: Crypto symbols: {crypto_symbols}")
-                stock_symbols = [s for s in symbols if s.upper() not in AVAILABLE_CRYPTO_ASSETS]
-                logger.info(f"DEBUG: DATA_MANAGER: Stock symbols: {stock_symbols}")
-                # For Yahoo and Polygon, fetch data symbol by symbol
-                for symbol in stock_symbols:
-                    try:
-                        data = await self.data_provider.get(
-                            symbol=symbol,
-                            start_date=start_dt,
-                            end_date=end_dt,
-                            timeframe=timeframe
-                        )
-                        
-                        if isinstance(data, pl.DataFrame) and data.height > 0:
-                            # Add symbol column if it doesn't exist
-                            if 'symbol' not in data.columns:
-                                data = data.with_columns(pl.lit(symbol).alias("symbol"))
-                            all_data.append(data)
-                            logger.info(f"Retrieved {data.height} data points for {symbol}")
-                        elif hasattr(data, 'empty') and not data.empty:
-                            # Handle pandas DataFrame
-                            polars_data = pl.from_pandas(data.reset_index())
-                            if 'symbol' not in polars_data.columns:
-                                polars_data = polars_data.with_columns(pl.lit(symbol).alias("symbol"))
-                            all_data.append(polars_data)
-                            logger.info(f"Retrieved {len(data)} data points for {symbol}")
-                        else:
-                            logger.warning(f"No data retrieved for {symbol}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error fetching data for {symbol}: {e}")
-                        continue
 
-                for symbol in crypto_symbols:
-                    try:
-                        data = await self.data_provider.get_crypto_historical_data(
-                            symbol=symbol,
-                            start_date=start_dt,
-                            end_date=end_dt,
-                            timeframe=timeframe
-                        )
-                        if isinstance(data, pl.DataFrame) and data.height > 0:
-                            all_data.append(data)
-                            logger.info(f"Retrieved {data.height} data points for Crypto {symbol}")
-                        else:
-                            logger.warning(f"No data retrieved for Crypto {symbol}")
-                    except Exception as e:
-                        logger.error(f"Error fetching data for Crypto {symbol}: {e}")
-                        continue
+            if provider_name == 'polygon':
+                all_data = await self._fetch_polygon_data(symbols, start_dt, end_dt, timeframe)
+            elif provider_name == 'alpaca':
+                all_data = await self._fetch_alpaca_data(symbols, start_dt, end_dt, timeframe)
+            elif provider_name == 'yahoo':
+                all_data = await self._fetch_yahoo_data(symbols, start_dt, end_dt, timeframe)
             
             if not all_data:
                 logger.warning("No data retrieved for any symbols")
                 return pl.DataFrame()
             
-            # Combine all data
             combined_data = pl.concat(all_data, how="vertical")
             combined_data = self._standardize_columns(combined_data)
             
-            # Sort by datetime and symbol
             if 'datetime' in combined_data.columns and 'symbol' in combined_data.columns:
                 combined_data = combined_data.sort(["datetime", "symbol"])
             elif 'timestamp' in combined_data.columns and 'symbol' in combined_data.columns:
@@ -335,12 +319,13 @@ class DataManager:
         logger.info(f"Fetching latest {limit} data points for {symbols} with timeframe {timeframe} using {data_provider}")
 
         end_date = datetime.now()
-        
+
         # Get the timeframe category and calculate lookback period
         days_to_look_back = self._calculate_lookback_days(timeframe, limit)
+        logger.info(f"Data Manager DEBUG: Days to look back: {days_to_look_back}")
 
         start_date = end_date - timedelta(days=max(1, days_to_look_back))
-        
+        logger.info(f"Data Manager DEBUG: Start date: {start_date}")
         start_date_str = start_date.strftime('%Y-%m-%d')
         end_date_str = end_date.strftime('%Y-%m-%d')
 
@@ -351,7 +336,7 @@ class DataManager:
                     symbols=symbols,
                     start_date=start_date_str,
                     end_date=end_date_str,
-                    timeframe=timeframe
+                    timeframe=timeframe.strip() 
                 )
 
             if historical_data.height == 0:
@@ -359,10 +344,13 @@ class DataManager:
 
             # Ensure we only return the last `limit` data points per symbol
             if 'symbol' in historical_data.columns:
-                return historical_data.group_by('symbol', maintain_order=True).tail(limit)
+                final_data = historical_data.group_by('symbol', maintain_order=True).tail(limit)
             else:
                 # If no symbol column, just take the last limit rows
-                return historical_data.tail(limit)
+                final_data = historical_data.tail(limit)
+
+            logger.info(f"Final data returned by fetch_data for {symbols}: {final_data.to_dicts()}")
+            return final_data
 
         except Exception as e:
             logger.error(f"Failed to fetch latest market data: {e}")

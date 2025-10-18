@@ -46,7 +46,7 @@ class BacktestEngine:
         user_id = params.user_id
         logger.info(f"Running backtest for strategy: {params.strategy_id}")
         
-        strategy_executor = StrategyExecutor(db=self.db, user_id=params.user_id, mode=TradingMode.BACKTEST)
+        strategy_executor = StrategyExecutor(db=self.db, user_id=params.user_id)
         performance_calculator = PerformanceCalculator()
 
         await self.data_manager.initialize_provider(params.data_provider, user_id)
@@ -85,4 +85,5 @@ class BacktestEngine:
         
         strategy_executor.trade_logger.clear_trades()
         
+
         return backtest_result

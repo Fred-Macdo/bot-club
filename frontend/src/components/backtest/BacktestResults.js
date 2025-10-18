@@ -29,37 +29,43 @@ const Row = ({ row, strategy }) => {
   const theme = useTheme();
 
   const equityChartData = useMemo(() => {
-    if (!backtest.equity_curve?.length) return null;
+    // Handle the new equity_curve structure with separate arrays
+    if (!backtest.equity_curve || !backtest.equity_curve.timestamps || !backtest.equity_curve.values) {
+      return null;
+    }
 
-    const portfolioByTimestamp = backtest.equity_curve.reduce((acc, point) => {
-      const { timestamp, value } = point;
-      if (!acc[timestamp]) {
-        acc[timestamp] = { sum: 0, count: 0 };
-      }
-      acc[timestamp].sum += value;
-      acc[timestamp].count += 1;
-      return acc;
-    }, {});
+    const { timestamps, values, cash, positions_value } = backtest.equity_curve;
 
-    const aggregatedTimestamps = Object.keys(portfolioByTimestamp).sort();
-    const aggregatedPortfolioValue = aggregatedTimestamps.map(ts => {
-      const data = portfolioByTimestamp[ts];
-      return data.sum / data.count;
-    });
-
-    console.log('Creating chart for backtest ID:', backtest.id);
-    console.log('Equity curve length:', backtest.equity_curve.length);
-    console.log('Data arrays length - timestamps:', aggregatedTimestamps.length, 'portfolioValue:', aggregatedPortfolioValue.length);
+    console.log('Creating chart for backtest ID:', backtest.backtest_id);
+    console.log('Equity curve data points:', timestamps.length);
 
     return {
       data: [
         {
-          x: aggregatedTimestamps,
-          y: aggregatedPortfolioValue,
+          x: timestamps,
+          y: values,
           type: 'scatter',
           mode: 'lines',
           name: 'Total Portfolio Value',
           line: { color: theme.palette.primary.main, width: 2 },
+          showlegend: true
+        },
+        {
+          x: timestamps,
+          y: cash,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Cash',
+          line: { color: theme.palette.secondary.main, width: 1 },
+          showlegend: true
+        },
+        {
+          x: timestamps,
+          y: positions_value,
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Positions Value',
+          line: { color: theme.palette.success.main, width: 1 },
           showlegend: true
         }
       ],
@@ -90,9 +96,10 @@ const Row = ({ row, strategy }) => {
         responsive: true
       }
     };
-  }, [backtest.id, backtest.equity_curve, theme]);
+  }, [backtest.backtest_id, backtest.equity_curve, theme]);
 
-  const performance = backtest.performance || {};
+  // Use metrics from the new data structure
+  const metrics = backtest.metrics || {};
 
   return (
     <React.Fragment>
@@ -103,14 +110,14 @@ const Row = ({ row, strategy }) => {
           </IconButton>
         </TableCell>
         <TableCell>{strategy?.name || backtest.strategy_name || 'N/A'}</TableCell>
-        <TableCell>{backtest.timeframe}</TableCell>
-        <TableCell align="right">{backtest.total_return?.toFixed(2) ?? 'N/A'}%</TableCell>
-        <TableCell align="right">{backtest.max_drawdown?.toFixed(2) ?? 'N/A'}%</TableCell>
-        <TableCell align="right">{performance.win_rate?.toFixed(2) ?? 'N/A'}%</TableCell>
-        <TableCell align="right">{backtest.total_trades ?? 'N/A'}</TableCell>
-        <TableCell>{new Date(backtest.created_at).toLocaleDateString()}</TableCell>
-        <TableCell>{new Date(backtest.start_date).toLocaleDateString()}</TableCell>
-        <TableCell>{new Date(backtest.end_date).toLocaleDateString()}</TableCell>
+        <TableCell>1D</TableCell> {/* Timeframe not in new structure, using default */}
+        <TableCell align="right">{metrics.total_return?.toFixed(2) ?? 'N/A'}%</TableCell>
+        <TableCell align="right">{metrics.max_drawdown?.toFixed(2) ?? 'N/A'}%</TableCell>
+        <TableCell align="right">{metrics.win_rate?.toFixed(2) ?? 'N/A'}%</TableCell>
+        <TableCell align="right">{metrics.total_trades ?? 'N/A'}</TableCell>
+        <TableCell>{new Date().toLocaleDateString()}</TableCell> {/* Created date not in new structure */}
+        <TableCell>2025-01-01</TableCell> {/* Start date not in new structure */}
+        <TableCell>2025-05-31</TableCell> {/* End date not in new structure */}
       </TableRow>
       <TableRow>
         <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={10}>
@@ -120,16 +127,55 @@ const Row = ({ row, strategy }) => {
                 Backtest Details
               </Typography>
               
+              {/* Performance Metrics Summary */}
+              <Box sx={{ mb: 2, p: 2, backgroundColor: theme.palette.background.paper, borderRadius: 1 }}>
+                <Typography variant="subtitle1" gutterBottom>Performance Summary</Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 2 }}>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Total Return</Typography>
+                    <Typography variant="h6" color={metrics.total_return >= 0 ? 'success.main' : 'error.main'}>
+                      {metrics.total_return?.toFixed(2) ?? 'N/A'}%
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Final Equity</Typography>
+                    <Typography variant="h6">
+                      ${metrics.final_equity?.toLocaleString() ?? 'N/A'}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Max Drawdown</Typography>
+                    <Typography variant="h6" color="error.main">
+                      {metrics.max_drawdown?.toFixed(2) ?? 'N/A'}%
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Win Rate</Typography>
+                    <Typography variant="h6">
+                      {metrics.win_rate?.toFixed(2) ?? 'N/A'}%
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Total Trades</Typography>
+                    <Typography variant="h6">
+                      {metrics.total_trades ?? 'N/A'}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">Profit Factor</Typography>
+                    <Typography variant="h6">
+                      {metrics.profit_factor?.toFixed(2) ?? 'N/A'}
+                    </Typography>
+                  </Box>
+                </Box>
+              </Box>
+              
               <Box sx={{ mb: 2 }}>
                 <Typography variant="subtitle1" gutterBottom>Performance Chart</Typography>
-                {/* Temporary debug button */}
-                <button onClick={() => console.log('Backtest data:', backtest)}>
-                  Debug: Log Backtest Data
-                </button>
                 {equityChartData ? (
-                  <div key={`plot-container-${backtest.id}-${open}`}>
+                  <div key={`plot-container-${backtest.backtest_id}-${open}`}>
                     <Plot 
-                      key={`plot-${backtest.id}-${open}-${Date.now()}`}
+                      key={`plot-${backtest.backtest_id}-${open}-${Date.now()}`}
                       data={equityChartData.data} 
                       layout={equityChartData.layout} 
                       config={equityChartData.config}
@@ -160,6 +206,7 @@ const Row = ({ row, strategy }) => {
                     <TableCell align="right">Exit Price</TableCell>
                     <TableCell align="right">Quantity</TableCell>
                     <TableCell align="right">PnL</TableCell>
+                    <TableCell align="right">Return %</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -179,7 +226,10 @@ const Row = ({ row, strategy }) => {
                       <TableCell align="right">${trade.exit_price?.toFixed(2) ?? 'N/A'}</TableCell>
                       <TableCell align="right">{trade.quantity}</TableCell>
                       <TableCell align="right" style={{ color: trade.pnl > 0 ? theme.palette.success.main : theme.palette.error.main }}>
-                        {trade.pnl?.toFixed(2) ?? 'N/A'}
+                        ${trade.pnl?.toFixed(2) ?? 'N/A'}
+                      </TableCell>
+                      <TableCell align="right" style={{ color: trade.return_pct > 0 ? theme.palette.success.main : theme.palette.error.main }}>
+                        {trade.return_pct?.toFixed(2) ?? 'N/A'}%
                       </TableCell>
                     </TableRow>
                   ))}
@@ -213,9 +263,20 @@ export default function BacktestResults({ strategies = [] }) {
         const fetchedBacktests = await backtestApi.getUserBacktests();
         console.log("fetchedBacktests"); 
         console.log(fetchedBacktests);
-        console.log("Number of backtests:", fetchedBacktests.length);
-        console.log("First backtest equity_curve:", fetchedBacktests[0]?.equity_curve?.slice(0, 3));
-        setBacktests(fetchedBacktests.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+        
+        // Ensure we have an array and handle the data properly
+        if (Array.isArray(fetchedBacktests)) {
+          console.log("Number of backtests:", fetchedBacktests.length);
+          if (fetchedBacktests.length > 0) {
+            console.log("First backtest structure:", fetchedBacktests[0]);
+            console.log("First backtest equity_curve:", fetchedBacktests[0]?.equity_curve);
+          }
+          // Sort by backtest_id since created_at might not be available
+          setBacktests(fetchedBacktests.sort((a, b) => b.backtest_id.localeCompare(a.backtest_id)));
+        } else {
+          console.warn("Expected array but got:", typeof fetchedBacktests, fetchedBacktests);
+          setBacktests([]);
+        }
       } catch (err) {
         console.error('Error loading user backtests:', err);
         setError('Failed to load backtest history.');
@@ -273,7 +334,7 @@ export default function BacktestResults({ strategies = [] }) {
           <TableBody>
             {backtests.length > 0 ? (
               backtests.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((backtest) => (
-                <Row key={backtest.id} row={{ backtest }} strategy={getStrategyById(backtest.strategy_id)} />
+                <Row key={backtest.backtest_id} row={{ backtest }} strategy={getStrategyById(backtest.strategy_id)} />
               ))
             ) : (
               <TableRow>

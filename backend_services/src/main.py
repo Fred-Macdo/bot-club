@@ -3,7 +3,13 @@ import logging
 from aiohttp import web
 import json
 from motor.motor_asyncio import AsyncIOMotorClient
+from lumibot.brokers import Alpaca
+from lumibot.traders import Trader
 from bson import ObjectId
+import logging
+import multiprocessing as mp
+from logging.handlers import QueueHandler
+import asyncio
 
 # Local imports
 from config import (
@@ -11,10 +17,12 @@ from config import (
     SERVICE_PORT
 )
 from services.backtest.backtest_service import BacktestService
-from services.trading.trading_service import TradingService
+from services.trading.trading_service import CryptoStrategy
 from services.utils.enums import TradingMode
-from services.utils.live_strategy_executor import LiveStrategyExecutor
-from services.utils.websocket_manager import websocket_manager
+from services.utils.websocket_manager import websocket_manager, WebSocketLogHandler
+from models.user_config import ConfigEncryption
+from models.strategy import StrategyConfig
+
 
 # Configure logging
 logging.basicConfig(
@@ -22,6 +30,35 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def run_strategy_process(strategy_config, alpaca_config, log_queue):
+    """
+    This function runs in a separate process to execute the trading strategy.
+    """
+    try:
+        # Create broker and strategy
+        broker = Alpaca(config=alpaca_config)
+        strategy = CryptoStrategy(broker=broker, strategy_config=strategy_config)
+
+        # Configure logging to pass logs back to the main process
+        queue_handler = QueueHandler(log_queue)
+        
+        # The strategy logger is a LoggerAdapter, so we need to add the handler
+        # to the underlying logger instance.
+        underlying_logger = strategy.logger.logger
+        underlying_logger.addHandler(queue_handler)
+        underlying_logger.setLevel(logging.INFO)
+        
+        # Run the strategy
+        strategy.run_live()
+    except Exception as e:
+        # Log any exceptions that occur during strategy execution
+        # Create a basic logger to put the error in the queue
+        temp_logger = logging.getLogger('process_runner')
+        temp_logger.addHandler(QueueHandler(log_queue))
+        temp_logger.setLevel(logging.ERROR)
+        temp_logger.error(f"Error in strategy process: {e}", exc_info=True)
+
 
 class BackendService:
     """
@@ -38,6 +75,8 @@ class BackendService:
         self.db = None
         self.backtest_service = None
         self.trading_service = None
+        self.executor = None # Will be initialized in startup
+        self.running_traders = {} # To keep track of running processes
         self.setup_routes()
 
     def setup_routes(self):
@@ -72,7 +111,13 @@ class BackendService:
             )
 
     async def websocket_handler(self, request):
-        """Handles WebSocket connections for log streaming."""
+        """
+        Handles WebSocket connections for log streaming.
+        Args:
+            request: The request object
+        Returns:
+            The WebSocket response
+        """
         strategy_id = request.match_info['strategy_id']
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -80,24 +125,16 @@ class BackendService:
         await websocket_manager.add_connection(strategy_id, ws)
         logger.info(f"WebSocket connection established for strategy: {strategy_id}")
         
-        try:
-            # Send current status upon connection
-            status = self.trading_service.get_trading_session_status(strategy_id)
-            await ws.send_json({"type": "status", "data": status})
-
-            async for msg in ws:
-                if msg.type == web.WSMsgType.TEXT:
-                    if msg.data == 'close':
-                        await ws.close()
-                elif msg.type == web.WSMsgType.ERROR:
-                    logger.error(f'WebSocket connection closed with exception {ws.exception()}')
-        finally:
-            websocket_manager.remove_connection(strategy_id, ws)
-            logger.info(f"WebSocket connection closed for strategy: {strategy_id}")
-
         return ws
         
     async def health_check(self, request):
+        """
+        Handles health check requests.
+        Args:
+            request: The request object
+        Returns:
+            The health check response
+        """
         return web.json_response({
             "status": "healthy",
             "services": {
@@ -108,6 +145,13 @@ class BackendService:
         })
 
     async def run_backtest(self, request):
+        """
+        Handles backtest requests.
+        Args:
+            request: The request object
+        Returns:
+            The backtest response
+        """
         try:
             data = await request.json()
             logger.info(f"Received backtest request: {data}")
@@ -137,40 +181,137 @@ class BackendService:
             return web.json_response({"error": str(e)}, status=500)
 
     async def run_trading(self, request):
-        """Start trading (paper or live)"""
+        """
+        Handles trading requests.
+        Args:
+            request: The request object
+        Returns:
+            The trading response
+        """
+        logger.info("Received request for /trading/run")
         try:
             data = await request.json()
-            logger.info(f"Received trading request: {data}")
+            logger.info(f"Received trading request data: {data}")
             
-            required_fields = ['strategy_id', 'mode', 'user_id']
+            required_fields = ['strategy_id', 'mode', 'user_id', 'data_provider']
             for field in required_fields:
                 if field not in data:
+                    logger.error(f"Missing required field: {field}")
                     return web.json_response({"error": f"Missing required field: {field}"}, status=400)
-            logger.info(f"DEBUG TRADING: Starting trading session for strategy: {data['strategy_id']}")
-            result = await self.trading_service.start_trading_session(
-                strategy_id=data['strategy_id'],
-                user_id=data['user_id'],
-                mode=TradingMode(data['mode']),
-                data_provider=data['data_provider']
-            )
-            return web.json_response(result)
+
+            logger.info(f"All required fields present. Starting trading session for strategy: {data['strategy_id']}")
             
+            strategy_id = data['strategy_id']
+            user_id = data['user_id']
+            mode = TradingMode(data['mode'])
+            data_provider = data['data_provider']
+
+            # 1. Fetch user credentials from MongoDB
+            user_config = await self.db.user_config.find_one({"user_id": user_id})
+            if not user_config:
+                return web.json_response({"error": "User configuration not found"}, status=404)
+
+            # 2. Decrypt credentials and configure Alpaca
+            if mode == TradingMode.PAPER:
+                api_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_paper_api_key"))
+                secret_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_paper_secret_key"))
+                paper = True
+                logger.info(f"Main Service: Using Alpaca Paper API key: {api_key}")
+            else: # Live trading
+                api_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_live_api_key"))
+                secret_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_live_secret_key"))
+                paper = False
+            
+            if not api_key or not secret_key:
+                return web.json_response({"error": "Alpaca API key/secret not configured for the selected mode"}, status=400)
+
+            ALPACA_CONFIG = {
+                "API_KEY": api_key,
+                "API_SECRET": secret_key,
+                "PAPER": paper,
+            }
+            # get strategy config from database
+            strategy_config = await self.db.strategy.find_one({"_id": ObjectId(strategy_id)})
+
+            logger.info(f"Main Service: Strategy configuration found: {strategy_config}, type: {type(strategy_config)}")
+
+            if not strategy_config:
+                return web.json_response({"error": "Strategy configuration not found"}, status=404)
+            
+            # Use multiprocessing to run the strategy in a separate process
+            log_queue = mp.Queue()
+            process = mp.Process(
+                target=run_strategy_process,
+                args=(strategy_config, ALPACA_CONFIG, log_queue)
+            )
+            process.start()
+
+            # Start a listener task to forward logs from the queue to the websocket
+            log_listener_task = asyncio.create_task(self.log_listener(strategy_id, log_queue))
+
+            self.running_traders[strategy_id] = {
+                "process": process,
+                "log_queue": log_queue,
+                "log_listener_task": log_listener_task
+            }
+
+            logger.info(f"Trading process started for strategy: {strategy_id} with PID {process.pid}")
+            return web.json_response({
+                "status": "trading_started",
+                "strategy_id": strategy_id
+            })
+            
+        except json.JSONDecodeError:
+            logger.error("Failed to decode JSON from request body.")
+            return web.json_response({"error": "Invalid JSON format"}, status=400)
         except Exception as e:
-            logger.error(f"Error running trading: {e}", exc_info=True)
+            logger.error(f"An unexpected error occurred in run_trading: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    async def log_listener(self, strategy_id: str, log_queue: mp.Queue):
+        """Listens for log records from a strategy process and forwards them."""
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                # Use run_in_executor to wait for items from the sync queue without blocking
+                log_record = await loop.run_in_executor(None, log_queue.get)
+                if log_record is None:  # Sentinel value to stop
+                    break
+                
+                log_message = f"{log_record.asctime} | {log_record.levelname} | [{log_record.name}] {log_record.getMessage()}"
+                await websocket_manager.broadcast_to_strategy(strategy_id, log_message)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in log listener for {strategy_id}: {e}")
+        logger.info(f"Log listener for strategy {strategy_id} stopped.")
 
     async def stop_trading(self, request):
         """Stop live/paper trading"""
         try:
             data = await request.json()
             strategy_id = data.get('strategy_id')
-            
+
             if not strategy_id:
                 return web.json_response({"error": "Strategy ID required"}, status=400)
-            
-            result = await self.trading_service.stop_trading_session(strategy_id)
-            return web.json_response(result)
-            
+
+            trader_info = self.running_traders.get(strategy_id)
+            if not trader_info or not trader_info["process"].is_alive():
+                return web.json_response({"error": "Trader not running or not found"}, status=404)
+
+            # Terminate the process
+            trader_info["process"].terminate()
+            trader_info["process"].join(timeout=5)
+            logger.info(f"Terminated process for strategy {strategy_id}")
+
+            # Stop the log listener
+            trader_info["log_queue"].put(None) # Send sentinel
+            trader_info["log_listener_task"].cancel()
+
+            del self.running_traders[strategy_id]
+
+            return web.json_response({"status": "stopped", "strategy_id": strategy_id})
+
         except Exception as e:
             logger.error(f"Error stopping trading: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
@@ -210,20 +351,24 @@ class BackendService:
         logger.info("Initializing backtest service")
         self.backtest_service = BacktestService(self.db)
         await self.backtest_service.initialize()
-        
-        logger.info("Initializing trading service")
-        self.trading_service = TradingService(self.db)
-        
+
         logger.info("Backend service started successfully")
 
     async def cleanup(self):
         logger.info("Shutting down services...")
+        # Stop all running traders
+        for strategy_id in list(self.running_traders.keys()):
+            trader_info = self.running_traders[strategy_id]
+            logger.info(f"Stopping trader for strategy {strategy_id}...")
+            if trader_info["process"].is_alive():
+                trader_info["process"].terminate()
+                trader_info["process"].join(timeout=5)
+            trader_info["log_queue"].put(None)
+            trader_info["log_listener_task"].cancel()
+
         if self.backtest_service:
             await self.backtest_service.shutdown()
         
-        if self.trading_service:
-            await self.trading_service.shutdown()
-
         if self.db_client:
             self.db_client.close()
             logger.info("Database connection closed")

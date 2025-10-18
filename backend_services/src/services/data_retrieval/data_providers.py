@@ -13,16 +13,17 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 TIMEFRAME_MAPPINGS = {
-    '1M': {'yahoo': '1m', 'alpaca': '1Min', 'polygon': ('minute', 1)},
-    '2M': {'yahoo': '2m', 'alpaca': '2Min', 'polygon': ('minute', 2)},
-    '5M': {'yahoo': '5m', 'alpaca': '5Min', 'polygon': ('minute', 5)},
-    '15M': {'yahoo': '15m', 'alpaca': '15Min', 'polygon': ('minute', 15)},
-    '30M': {'yahoo': '30m', 'alpaca': '30Min', 'polygon': ('minute', 30)},
-    '60M': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
-    '1h': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
+    '1MIN': {'yahoo': '1m', 'alpaca': '1Min', 'polygon': ('minute', 1)},
+    '2MIN': {'yahoo': '2m', 'alpaca': '2Min', 'polygon': ('minute', 2)},
+    '5MIN': {'yahoo': '5m', 'alpaca': '5Min', 'polygon': ('minute', 5)},
+    '15MIN': {'yahoo': '15m', 'alpaca': '15Min', 'polygon': ('minute', 15)},
+    '30MIN': {'yahoo': '30m', 'alpaca': '30Min', 'polygon': ('minute', 30)},
+    '60MIN': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
+    '1HOUR': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
     '1H': {'yahoo': '60m', 'alpaca': '1Hour', 'polygon': ('hour', 1)},
     '1d': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
     '1D': {'yahoo': '1d', 'alpaca': '1Day', 'polygon': ('day', 1)},
+    '2D': {'yahoo': '2d', 'alpaca': '2Day', 'polygon': ('day', 2)},
     '5D': {'yahoo': '5d', 'alpaca': '5Day', 'polygon': ('day', 5)},
     '1wk': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
     '1w': {'yahoo': '1wk', 'alpaca': '1Week', 'polygon': ('week', 1)},
@@ -142,6 +143,7 @@ class YahooFinanceProvider(BaseDataProvider):
                 if col not in df.columns:
                     df[col] = 0
             
+            logger.info(f"Yahoo Finance data for {symbol}: {df.to_json(orient='records')}")
             return df
         
         return await loop.run_in_executor(None, fetch_data)
@@ -200,6 +202,9 @@ class AlpacaProvider(BaseDataProvider):
             A Polars DataFrame containing the historical data with a 'symbol' column.
             Returns an empty DataFrame if no data is found or an error occurs.
         """
+
+        timeframe_str = TIMEFRAME_MAPPINGS[timeframe].get('alpaca')
+        logger.info(f"DEBUG: Data Provider: Alpaca: Timeframe: {timeframe_str}")
         async with aiohttp.ClientSession() as session:
             stocks_url = f"{self.base_url}/v2/stocks/bars"
             crypto_url = f"{self.base_url}/v1beta3/crypto/us/bars"
@@ -226,7 +231,7 @@ class AlpacaProvider(BaseDataProvider):
             if len(stocks_symbols) > 0:
                 params = {
                     'symbols': ','.join(stocks_symbols),
-                    'timeframe': TIMEFRAME_MAPPINGS[timeframe].get('alpaca'),
+                    'timeframe': timeframe_str,
                     'start': start_date.strftime('%Y-%m-%d'),
                     'end': end_date.strftime('%Y-%m-%d'),
                     'limit': 10000
@@ -248,15 +253,17 @@ class AlpacaProvider(BaseDataProvider):
                             page_token = data.get('next_page_token')
                             if not page_token:
                                 break
+                            params['page_token'] = page_token
                         else:
                             logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
                             return pl.DataFrame()
+                    await asyncio.sleep(0.3)  # Added delay to avoid rate limiting
 
             # Fetch crypto data
             if len(crypto_symbols) > 0:
                 params = {
                     'symbols': ','.join(crypto_symbols),
-                    'timeframe': TIMEFRAME_MAPPINGS[timeframe].get('alpaca'),
+                    'timeframe': timeframe_str,
                     'start': start_date.strftime('%Y-%m-%d'),
                     'end': end_date.strftime('%Y-%m-%d'),
                     'limit': 10000
@@ -277,15 +284,20 @@ class AlpacaProvider(BaseDataProvider):
                             page_token = data.get('next_page_token')
                             if not page_token:
                                 break
+                            params['page_token'] = page_token
                         else:
+                            logger.warning(f"Alpaca bar for {symbol}: Status {response.status}")
                             logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
                             return pl.DataFrame()
+                    await asyncio.sleep(0.3)  # Added delay to avoid rate limiting
 
             df = pl.DataFrame(all_bars)
 
-            df = df.with_columns(
-                pl.col("t").str.to_datetime().alias("timestamp")
-            ).rename({
+            if not df.is_empty():
+                #logger.info(f"Alpaca data for {symbols}: {df.to_dicts()}")
+                df = df.with_columns(
+                    pl.col("t").str.to_datetime(format="%Y-%m-%dT%H:%M:%S%.fZ", time_zone="America/New_York").alias("timestamp")
+                ).rename({
                 'o': 'open',
                 'h': 'high',
                 'l': 'low',
@@ -293,13 +305,10 @@ class AlpacaProvider(BaseDataProvider):
                 'v': 'volume',
                 'vw': 'vwap'
             })
-            
             # Ensure all required columns are present before selecting
             required_cols = ['symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'vwap']
-            
             # Filter out columns that are not in the DataFrame
             existing_cols = [col for col in required_cols if col in df.columns]
-
             logger.info(f"DEBUG: ALPACA_PROVIDER: Existing columns: {df.head(10)}")
             
             return df.select(existing_cols)
@@ -393,6 +402,7 @@ class PolygonProvider(BaseDataProvider):
             url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{start_date}/{end_date}"
         else:
             crypto_symbol = 'X:' + symbol + 'USD'
+            logger.info(f"Data Provider: Polygon: Crypto symbol: {crypto_symbol}")
             url = f"{self.base_url}/v2/aggs/ticker/{crypto_symbol}/range/{multiplier}/{timespan}/{start_date}/{end_date}"
 
         params = {
@@ -409,10 +419,12 @@ class PolygonProvider(BaseDataProvider):
                 if response.status == 200:      
                     logger.info(f"Data Provider: Polygon Response: {response.status}")
                 else:
+                    logger.warning(f"Polygon bar for {symbol}: Status {response.status}")
                     logger.error(f"Data Provider: Polygon Response: {data}")
 
                 if 'results' in data and data['results']:
                     df = pl.DataFrame(data['results'])
+                    logger.info(f"Polygon data for {symbol}: {df.to_dicts()}")
                     
                     # Convert timestamp to datetime
                     df = df.with_columns(
@@ -543,6 +555,7 @@ class PolygonProvider(BaseDataProvider):
                                 
                                 else:
                                     logger.warning(f"No bar data found for {symbol}")
+                                    logger.warning(f"Polygon crypto bar for {symbol}: Status {response.status}")
                                     return self._create_empty_bar_record(symbol)
                             
                             elif response.status == 401:

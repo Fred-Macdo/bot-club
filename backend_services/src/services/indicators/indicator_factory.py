@@ -92,9 +92,9 @@ class IndicatorFactory:
             signal_period: Signal period for MACD
         """
         return [
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macd"),
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdsignal"),
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdhist")
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macd").alias("macd_line"),
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdsignal").alias("macd_signal"),
+            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdhist").alias("macd_hist")
         ]
     
     def calculate_bollinger_bands(self, period, std):
@@ -203,6 +203,7 @@ class IndicatorFactory:
             'sma': lambda params: self.calculate_sma(params['period']),
             'ema': lambda params: self.calculate_ema(params['period']),
             'rsi': lambda params: self.calculate_rsi(params['period']),
+            'macd': lambda params: self.calculate_macd(params.get('fast_period', 12), params.get('slow_period', 26), params.get('signal_period', 9)),
             'bbands': lambda params: self.calculate_bollinger_bands(params['period'], params['std']),
             'atr': lambda params: self.calculate_atr(params['period']),
             'adx': lambda params: self.calculate_adx(params['period']),
