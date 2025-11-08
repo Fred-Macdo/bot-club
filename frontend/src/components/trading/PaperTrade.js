@@ -19,7 +19,8 @@ import {
   Alert,
   CircularProgress,
   Autocomplete,
-  TextField
+  TextField,
+  Stack
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -31,6 +32,7 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { DataGrid } from '@mui/x-data-grid';
 import Plot from 'react-plotly.js';
 import { useStrategy } from '../../context/StrategyContext';
+import { useDeployedStrategy } from '../../context/DeployedStrategyContext';
 import {
   fetchDefaultStrategies,
   deployStrategy,
@@ -99,37 +101,67 @@ const PaperTradingPage = () => {
     refreshStrategies 
   } = useStrategy();
   
-  // State for strategy selection and deployment
-  const [selectedStrategy, setSelectedStrategy] = useState(null);
-  const [dataProvider, setDataProvider] = useState('alpaca');
-  const [isDeployed, setIsDeployed] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  // Get deployment state from context
+  const {
+    deployedStrategy,
+    isDeployed,
+    dataProvider,
+    deploymentTime,
+    deployStrategy: deployStrategyContext,
+    stopStrategy: stopStrategyContext,
+    setDataProvider
+  } = useDeployedStrategy();
   
+  // Local state for UI
+  const [selectedStrategy, setSelectedStrategy] = useState(deployedStrategy);
+  const [isLoading, setIsLoading] = useState(false);
+  const [pnlData, setPnlData] = useState([]); // Add this line
+  const [currentPnL, setCurrentPnL] = useState(0); // Add this line
+  const [positions, setPositions] = useState([]); // Add state for positions
+
   const handleDataProviderChange = (event) => {
     setDataProvider(event.target.value);
   };
+
+  // Sync selectedStrategy with deployedStrategy from context
+  useEffect(() => {
+    if (deployedStrategy && !selectedStrategy) {
+      setSelectedStrategy(deployedStrategy);
+      console.log('Restored deployed strategy from context:', deployedStrategy.name);
+    }
+  }, [deployedStrategy, selectedStrategy]);
   
   // State from our new WebSocket hook
-  const { logs, status: socketStatus, error: socketError } = useTradingSocket(selectedStrategy?.id);
+  const { 
+    logs, 
+    status: socketStatus, 
+    error: socketError,
+    trades: liveTrades,
+    completedTrades,
+    positions: wsPositions, // Renamed to avoid conflict with local state
+    metrics 
+  } = useTradingSocket(isDeployed ? selectedStrategy?.id : null);
 
-  // State for trading data
-  const [pnlData, setPnlData] = useState([]);
-  const [trades, setTrades] = useState([]);
-  const [currentPnL, setCurrentPnL] = useState(0);
-
-  // Handle pre-selected strategy from URL parameters
+  // Update P&L data and current P&L when metrics change
   useEffect(() => {
-    const preSelectedStrategyData = searchParams.get('strategyData');
-    if (preSelectedStrategyData) {
-      try {
-        const strategyData = JSON.parse(preSelectedStrategyData);
-        setSelectedStrategy(strategyData);
-        console.log('Pre-selected strategy loaded:', strategyData);
-      } catch (error) {
-        console.error('Error parsing pre-selected strategy data:', error);
-      }
+    if (metrics) {
+      setCurrentPnL(metrics.totalPnL || 0);
+      setPnlData(prev => [
+        ...prev,
+        {
+          timestamp: new Date(metrics.timestamp),
+          value: metrics.totalPnL || 0
+        }
+      ].slice(-100)); // Keep last 100 data points
     }
-  }, [searchParams]);
+  }, [metrics]);
+
+  // Update positions state when websocket data changes
+  useEffect(() => {
+    if (wsPositions) {
+      setPositions(wsPositions);
+    }
+  }, [wsPositions]);
 
   // Combine and format all strategies
   const allStrategies = useMemo(() => {
@@ -169,11 +201,14 @@ const PaperTradingPage = () => {
     setIsLoading(true);
     
     try {
-      setIsDeployed(true);
       const result = await deployStrategy(selectedStrategy.id, 'paper', dataProvider);
       if (!result.success) {
         console.error("Deployment failed:", result.error);
         alert(`Deployment failed: ${result.error}`);
+      } else {
+        // Save to context (which persists to localStorage)
+        deployStrategyContext(selectedStrategy, dataProvider);
+        console.log('Strategy deployed successfully');
       }
       
     } catch (error) {
@@ -196,7 +231,8 @@ const PaperTradingPage = () => {
       const result = await stopStrategy(selectedStrategy.id);
 
       if (result.success) {
-        setIsDeployed(false);   
+        // Update context (which persists to localStorage)
+        stopStrategyContext();   
         console.log('Stop command sent successfully.');
       } else {
         console.error('Failed to stop strategy:', result.error);
@@ -215,18 +251,189 @@ const PaperTradingPage = () => {
   const tradeColumns = [
     { field: 'id', headerName: 'ID', width: 70 },
     { field: 'symbol', headerName: 'Symbol', width: 100 },
-    { field: 'side', headerName: 'Side', width: 80, renderCell: (params) => (<Chip label={params.value} color={params.value === 'BUY' ? 'success' : 'error'} size="small"/>) },
-    { field: 'quantity', headerName: 'Quantity', width: 100, type: 'number' },
-    { field: 'entryPrice', headerName: 'Entry Price', width: 120, type: 'number', valueFormatter: (params) => `$${params.value?.toFixed(2) || 'N/A'}` },
-    { field: 'exitPrice', headerName: 'Exit Price', width: 120, type: 'number', valueFormatter: (params) => `$${params.value?.toFixed(2) || 'N/A'}` },
-    { field: 'entryTime', headerName: 'Entry Time', width: 180, type: 'dateTime', valueFormatter: (params) => params.value?.toLocaleString() || 'N/A' },
-    { field: 'exitTime', headerName: 'Exit Time', width: 180, type: 'dateTime', valueFormatter: (params) => params.value?.toLocaleString() || 'N/A' },
-    { field: 'pnl', headerName: 'P&L', width: 120, type: 'number', renderCell: (params) => (<Typography variant="body2" sx={{ color: params.value >= 0 ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>${params.value?.toFixed(2) || '0.00'}</Typography>) },
-    { field: 'status', headerName: 'Status', width: 100, renderCell: (params) => (<Chip label={params.value} color={params.value === 'OPEN' ? 'warning' : 'default'} size="small"/>) }
+    { 
+      field: 'side', 
+      headerName: 'Side', 
+      width: 80, 
+      renderCell: (params) => {
+        if (!params || !params.value) return null;
+        return <Chip label={params.value} color={params.value === 'BUY' ? 'success' : 'error'} size="small"/>;
+      }
+    },
+    { 
+      field: 'quantity', 
+      headerName: 'Quantity', 
+      width: 100, 
+      type: 'number',
+      valueFormatter: (params) => {
+        if (!params || params.value == null || params.value === undefined) return 'N/A';
+        try {
+          return Number(params.value).toFixed(2);
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'entryPrice', 
+      headerName: 'Entry Price', 
+      width: 120, 
+      type: 'number', 
+      valueFormatter: (params) => {
+        if (!params || params.value == null || params.value === undefined) return 'N/A';
+        try {
+          return `$${Number(params.value).toFixed(2)}`;
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'exitPrice', 
+      headerName: 'Exit Price', 
+      width: 120, 
+      type: 'number', 
+      valueFormatter: (params) => {
+        if (!params || params.value == null || params.value === undefined) return 'N/A';
+        try {
+          return `$${Number(params.value).toFixed(2)}`;
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'entryTime', 
+      headerName: 'Entry Time', 
+      width: 180, 
+      type: 'dateTime', 
+      valueGetter: (params) => {
+        if (!params || !params.row || params.row.entryTime == null) return null;
+        try {
+          return new Date(params.row.entryTime);
+        } catch {
+          return null;
+        }
+      },
+      valueFormatter: (params) => {
+        if (!params || params.value == null || params.value === undefined) return 'N/A';
+        try {
+          return params.value.toLocaleString();
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'exitTime', 
+      headerName: 'Exit Time', 
+      width: 180, 
+      type: 'dateTime', 
+      valueGetter: (params) => {
+        if (!params || !params.row || params.row.exitTime == null) return null;
+        try {
+          return new Date(params.row.exitTime);
+        } catch {
+          return null;
+        }
+      },
+      valueFormatter: (params) => {
+        if (!params || params.value == null || params.value === undefined) return 'N/A';
+        try {
+          return params.value.toLocaleString();
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'pnl', 
+      headerName: 'P&L', 
+      width: 120, 
+      type: 'number', 
+      renderCell: (params) => {
+        if (!params || params.value == null || params.value === undefined) {
+          return <Typography variant="body2">N/A</Typography>;
+        }
+        try {
+          const pnlValue = Number(params.value);
+          return (
+            <Typography 
+              variant="body2" 
+              sx={{ 
+                color: pnlValue >= 0 ? theme.palette.success.main : theme.palette.error.main, 
+                fontWeight: 'bold' 
+              }}
+            >
+              ${pnlValue.toFixed(2)}
+            </Typography>
+          );
+        } catch {
+          return <Typography variant="body2">N/A</Typography>;
+        }
+      }
+    },
+    { 
+      field: 'status', 
+      headerName: 'Status', 
+      width: 100, 
+      renderCell: (params) => {
+        if (!params) return null;
+        const status = params.value || 'PENDING';
+        return (
+          <Chip 
+            label={status} 
+            color={status === 'CLOSED' ? 'default' : status === 'FILLED' ? 'success' : 'warning'} 
+            size="small"
+          />
+        );
+      }
+    }
   ];
 
   const pnlPlotData = [{ x: pnlData.map(d => d.timestamp), y: pnlData.map(d => d.value), type: 'scatter', mode: 'lines', name: 'P&L', line: { color: currentPnL >= 0 ? theme.palette.success.main : theme.palette.error.main, width: 2 } }];
   const pnlPlotLayout = { title: 'Paper Trading P&L', xaxis: { title: 'Time' }, yaxis: { title: 'P&L ($)', tickformat: '$,.0f' }, plot_bgcolor: theme.palette.background.paper, paper_bgcolor: theme.palette.background.paper, font: { color: theme.palette.text.primary }, margin: { l: 60, r: 30, b: 50, t: 50 } };
+
+  const positionColumns = [
+    { field: 'symbol', headerName: 'Symbol', width: 130 },
+    { field: 'quantity', headerName: 'Quantity', width: 130, type: 'number' },
+    { 
+      field: 'avgEntryPrice', 
+      headerName: 'Avg. Entry Price', 
+      width: 150, 
+      type: 'number',
+      valueFormatter: (value) => value ? `$${Number(value).toFixed(4)}` : 'N/A'
+    },
+    { 
+      field: 'marketPrice', 
+      headerName: 'Market Price', 
+      width: 150, 
+      type: 'number',
+      valueFormatter: (value) => value ? `$${Number(value).toFixed(4)}` : 'N/A'
+    },
+    { 
+      field: 'marketValue', 
+      headerName: 'Market Value', 
+      width: 150, 
+      type: 'number',
+      valueFormatter: (value) => value ? `$${Number(value).toFixed(2)}` : 'N/A'
+    },
+    { 
+      field: 'unrealizedPnl', 
+      headerName: 'Unrealized P&L', 
+      width: 160, 
+      type: 'number',
+      renderCell: (params) => {
+        const pnl = Number(params.value) || 0;
+        const color = pnl >= 0 ? theme.palette.success.main : theme.palette.error.main;
+        return (
+          <Typography variant="body2" sx={{ color: color, fontWeight: 'bold' }}>
+            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          </Typography>
+        );
+      }
+    },
+  ];
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -239,6 +446,13 @@ const PaperTradingPage = () => {
       {selectedStrategy && searchParams.get('strategyData') && (
         <Alert severity="success" sx={{ mb: 3 }}>
           Strategy "<strong>{selectedStrategy.name}</strong>" has been pre-loaded from the Strategy Library and is ready to deploy!
+        </Alert>
+      )}
+
+      {/* Show alert if deployment was restored from localStorage */}
+      {isDeployed && deploymentTime && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          Deployment restored: Strategy "<strong>{deployedStrategy?.name}</strong>" has been running since {new Date(deploymentTime).toLocaleString()}
         </Alert>
       )}
 
@@ -348,40 +562,132 @@ const PaperTradingPage = () => {
         </AccordionDetails>
       </Accordion>
 
+      {/* Performance Metrics */}
+      {metrics && isDeployed && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Typography variant="h6" gutterBottom>Performance Metrics</Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ color: metrics.totalPnL >= 0 ? theme.palette.success.main : theme.palette.error.main, fontWeight: 'bold' }}>
+                  ${metrics.totalPnL?.toFixed(2) || '0.00'}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Total P&L</Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>{metrics.totalTrades || 0}</Typography>
+                <Typography variant="caption" color="text.secondary">Total Trades</Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.info.main }}>
+                  {metrics.winRate?.toFixed(1) || '0.0'}%
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Win Rate</Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>
+                  {metrics.winningTrades || 0}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Winning</Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.error.main }}>
+                  {metrics.losingTrades || 0}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Losing</Typography>
+              </Box>
+            </Grid>
+            <Grid item xs={6} sm={4} md={2}>
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                  ${metrics.accountValue?.toFixed(2) || '0.00'}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">Account Value</Typography>
+              </Box>
+            </Grid>
+          </Grid>
+        </Paper>
+      )}
      
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: 400 }}>
-            <Typography variant="h6" gutterBottom>Strategy Performance</Typography>
-            {isDeployed && pnlData.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see paper trading performance</Box>)}
-          </Paper>
-        </Grid>
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="h6" gutterBottom>Trading Logs</Typography>
-            <Box sx={{ flexGrow: 1, overflow: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1, backgroundColor: theme.palette.background.default }}>
-              {socketError && <Alert severity="error">{socketError}</Alert>}
-              {logs.map((log, index) => (
-                <Box key={index} sx={{ mb: 0.5, fontSize: '0.875rem', fontFamily: 'monospace' }}>
-                  <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{new Date(log.timestamp).toLocaleTimeString()}</Typography>
-                  <Typography component="span" variant="body2" sx={{ color: log.level === 'WARNING' ? theme.palette.warning.main : theme.palette.info.main, mx: 1 }}>[{log.level}]</Typography>
-                  <Typography component="span" variant="body2">{log.message}</Typography>
-                </Box>
-              ))}
-              {logs.length === 0 && !socketError && (
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.palette.text.secondary }}>
-                  Waiting for logs...
-                </Box>
-              )}
-            </Box>
-          </Paper>
-        </Grid>
-      </Grid>
+      {/* Strategy Performance, Trading Logs, and Current Positions */}
+      <Stack spacing={3} sx={{ mb: 3 }}>
+        <Paper sx={{ p: 2, height: 400 }}>
+          <Typography variant="h6" gutterBottom>Strategy Performance</Typography>
+          {isDeployed && pnlData.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see paper trading performance</Box>)}
+        </Paper>
+        <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
+          <Typography variant="h6" gutterBottom>Trading Logs</Typography>
+          <Box sx={{ flexGrow: 1, overflow: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1, backgroundColor: theme.palette.background.default }}>
+            {socketError && <Alert severity="error">{socketError}</Alert>}
+            {logs.map((log, index) => (
+              <Box key={index} sx={{ mb: 0.5, fontSize: '0.875rem', fontFamily: 'monospace' }}>
+                <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{new Date(log.timestamp).toLocaleTimeString()}</Typography>
+                <Typography component="span" variant="body2" sx={{ color: log.level === 'WARNING' ? theme.palette.warning.main : theme.palette.info.main, mx: 1 }}>[{log.level}]</Typography>
+                <Typography component="span" variant="body2">{log.message}</Typography>
+              </Box>
+            ))}
+            {logs.length === 0 && !socketError && (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.palette.text.secondary }}>
+                Waiting for logs...
+              </Box>
+            )}
+          </Box>
+        </Paper>
+        
+        {/* Current Positions Panel */}
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>Current Positions</Typography>
+          <Box sx={{ height: 250, width: '100%' }}>
+            <DataGrid
+              rows={positions}
+              columns={positionColumns}
+              getRowId={(row) => row.symbol} // Use symbol as the unique ID
+              pageSizeOptions={[5]}
+              disableSelectionOnClick
+              components={{
+                NoRowsOverlay: () => (
+                  <Stack height="100%" alignItems="center" justifyContent="center">
+                    No open positions
+                  </Stack>
+                ),
+              }}
+              sx={{
+                '& .MuiDataGrid-cell': { borderColor: theme.palette.divider },
+                '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider }
+              }}
+            />
+          </Box>
+        </Paper>
+      </Stack>
 
+      {/* Completed Trades Table */}
       <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>Trade History</Typography>
+        <Typography variant="h6" gutterBottom>
+          Completed Trades 
+          {completedTrades && completedTrades.length > 0 && (
+            <Chip label={`${completedTrades.length} trades`} size="small" sx={{ ml: 2 }} />
+          )}
+        </Typography>
         <Box sx={{ height: 400, width: '100%' }}>
-          <DataGrid rows={isDeployed ? trades : []} columns={tradeColumns} pageSize={5} rowsPerPageOptions={[5]} disableSelectionOnClick sx={{ '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } }} />
+          <DataGrid 
+            rows={completedTrades || []} 
+            columns={tradeColumns} 
+            pageSize={5} 
+            rowsPerPageOptions={[5, 10, 25]} 
+            disableSelectionOnClick 
+            sx={{ 
+              '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, 
+              '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } 
+            }} 
+          />
         </Box>
       </Paper>
     </Container>

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 import uuid
 import asyncio
 import httpx
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 from bson import ObjectId
 import json
 import logging
@@ -45,7 +45,7 @@ async def run_backtest_async(
     start_date: str,
     end_date: str,
     data_provider: str,
-    db: AsyncIOMotorDatabase
+    db: Database
 ):
     """Run backtest asynchronously and update progress in Redis"""
     try:
@@ -158,7 +158,7 @@ async def run_backtest(
     request: BacktestRunRequest,
     background_tasks: BackgroundTasks,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """
     Starts a new backtest run.
@@ -276,7 +276,7 @@ async def get_backtest_status(
 async def get_backtest_results(
     backtest_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """
     Fetches the detailed results of a completed backtest.
@@ -350,7 +350,7 @@ async def get_trade_details(
     backtest_id: str,
     trade_id: int,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """
     Retrieves detailed information for a single trade within a backtest.
@@ -446,7 +446,7 @@ async def get_trade_details(
 async def deploy_strategy(
     request: DeployRequest,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """
     Deploys a trading strategy for live or paper trading.
@@ -519,7 +519,7 @@ async def deploy_strategy(
 @router.get("/user/data-providers")
 async def get_user_data_providers(
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """
     Fetches the list of available data providers for the authenticated user.
@@ -553,7 +553,7 @@ async def get_user_data_providers(
 # This should be the primary endpoint for fetching all backtests for the logged-in user
 @router.get("/", response_model=List[BacktestSummary])
 async def get_user_backtests_root(
-    db: AsyncIOMotorDatabase = Depends(get_db),
+    db: Database = Depends(get_db),
     current_user: UserInDB = Depends(get_current_user_from_token)
 ):
     """
@@ -601,7 +601,7 @@ class EquityPoint(BaseModel):
 
 @router.get("/user", response_model=None)
 async def get_user_backtests(
-    db: AsyncIOMotorDatabase = Depends(get_db),
+    db: Database = Depends(get_db),
     current_user: UserInDB = Depends(get_current_user_from_token)
 ):
     """

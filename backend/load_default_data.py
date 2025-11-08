@@ -4,7 +4,8 @@ import os
 import sys
 import argparse
 from pathlib import Path
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
+from bson import ObjectId
 from datetime import datetime
 
 # Import the strategy models - adjust path for Docker environment
@@ -82,7 +83,7 @@ async def load_default_data(yaml_dir: str, db_uri: str, db_name: str):
     print(f"Database: {db_name}")
     print(f"YAML directory: {yaml_dir}")
     
-    client = AsyncIOMotorClient(db_uri)
+    client = AsyncMongoClient(db_uri)
     db = client[db_name]
     
     try:

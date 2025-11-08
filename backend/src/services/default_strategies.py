@@ -1,9 +1,15 @@
     # backend/services/default_strategies.py
-from typing import List, Dict, Any
-from motor.motor_asyncio import AsyncIOMotorDatabase
+import asyncio
+import logging
 from datetime import datetime
 import hashlib
 import json
+
+from pymongo.database import Database
+from typing import Dict, Any, List
+
+from ..models.strategy import Strategy
+from ..utils.db_executor import run_db_operation
 
 # Default strategies configuration
 DEFAULT_STRATEGIES = [
@@ -121,7 +127,7 @@ DEFAULT_STRATEGIES = [
     }
 ]
 
-async def initialize_default_strategies(db: AsyncIOMotorDatabase) -> None:
+async def initialize_default_strategies(db: Database) -> None:
     """
     Initialize default strategies in the database.
     This function ensures that default strategies are created only once.
@@ -146,7 +152,7 @@ async def initialize_default_strategies(db: AsyncIOMotorDatabase) -> None:
             # You could implement version checking here if needed
             print(f"Default strategy already exists: {strategy['name']}")
 
-async def get_default_strategies_from_db(db: AsyncIOMotorDatabase) -> List[Dict[str, Any]]:
+async def get_default_strategies_from_db(db: Database) -> List[Dict[str, Any]]:
     """
     Retrieve all default strategies from the database.
     These are templates that users can view but not modify.
@@ -171,7 +177,7 @@ async def create_checksum_for_strategy(strategy_config: Dict[str, Any]) -> str:
     config_string = json.dumps(strategy_config, sort_keys=True)
     return hashlib.sha256(config_string.encode()).hexdigest()
 
-async def update_default_strategies_if_needed(db: AsyncIOMotorDatabase) -> None:
+async def update_default_strategies_if_needed(db: Database) -> None:
     """
     Check if any default strategies need updating based on version or checksum.
     This is useful when you update your default strategies in code.
@@ -200,3 +206,17 @@ async def update_default_strategies_if_needed(db: AsyncIOMotorDatabase) -> None:
                     }
                 )
                 print(f"Updated default strategy: {strategy['name']}")
+
+async def get_default_strategies(db: Database) -> List[Dict[str, Any]]:
+    """Fetches default strategies from the database."""
+    cursor = db.strategy.find({"is_default": True})
+    strategies = await run_db_operation(list, cursor)
+    return strategies
+
+async def insert_default_strategies(db: Database, strategies: List[Dict[str, Any]]):
+    """Inserts default strategies if they don't already exist."""
+    await run_db_operation(
+        db.strategy.insert_many,
+        strategies,
+        ordered=False  # Continue on duplicate key errors
+    )

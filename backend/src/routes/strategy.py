@@ -1,6 +1,6 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 from bson import ObjectId
 
 from ..dependencies import get_db, get_current_user_from_token
@@ -71,7 +71,7 @@ def backtest_result_to_response(backtest_result: BacktestResult) -> BacktestResp
 @router.get("/user_strategies", response_model=List[StrategyResponse])
 async def get_user_strategies(
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Get all strategies for the current user"""
     try:
@@ -98,7 +98,7 @@ async def get_user_strategies(
         )
 
 @router.get("/default", response_model=List[StrategyCreate])
-async def get_default_strategies_endpoint(db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_default_strategies_endpoint(db: Database = Depends(get_db)):
     """Get default strategies from database collection"""
     try:
         strategy_docs = await get_default_strategies_from_db(db)
@@ -139,7 +139,7 @@ async def get_default_strategies_endpoint(db: AsyncIOMotorDatabase = Depends(get
 # ...existing code...
 
 @router.get("/defaults/with-ids", response_model=List[dict])
-async def get_default_strategies_with_ids(db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_default_strategies_with_ids(db: Database = Depends(get_db)):
     """Get default strategies with IDs for backtest selection"""
     try:
         default_strategies_collection = db["default_strategies"]
@@ -165,7 +165,7 @@ async def get_default_strategies_with_ids(db: AsyncIOMotorDatabase = Depends(get
 async def get_strategy(
     strategy_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Get a specific strategy by ID"""
     try:
@@ -189,7 +189,7 @@ async def get_strategy(
 async def create_new_strategy(
     strategy_data: StrategyCreate,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Create a new strategy"""
     try:
@@ -206,7 +206,7 @@ async def update_existing_strategy(
     strategy_id: str,
     strategy_update: StrategyUpdate,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Update an existing strategy"""
     try:
@@ -230,7 +230,7 @@ async def update_existing_strategy(
 async def delete_existing_strategy(
     strategy_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Delete a strategy and its associated backtest results"""
     try:
@@ -267,7 +267,7 @@ async def toggle_strategy_trading(
     strategy_id: str,
     toggle_data: dict,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Toggle strategy active/inactive status"""
     try:
@@ -291,7 +291,7 @@ async def toggle_strategy_trading(
 
 # Background task for running backtests
 async def run_backtest_task(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     strategy: Strategy,
     params: BacktestParams,
     user_id: str
@@ -320,7 +320,7 @@ async def start_backtest(
     backtest_params: BacktestParams,
     background_tasks: BackgroundTasks,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Start a backtest for a strategy"""
     try:
@@ -352,7 +352,7 @@ async def start_backtest(
 async def get_strategy_backtest_results(
     strategy_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Get all backtest results for a strategy"""
     try:
@@ -379,7 +379,7 @@ async def get_specific_backtest_result(
     strategy_id: str,
     backtest_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Get a specific backtest result"""
     try:

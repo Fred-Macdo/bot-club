@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import List, Optional, Union, Dict, Any
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
+from ..utils.db_executor import run_db_operation
 
 from ..models.backtest import (
     Backtest,
@@ -323,6 +324,13 @@ async def get_backtest_execution(
     if execution_data:
         return BacktestExecution(**execution_data)
     return None
+
+async def get_backtest_results_from_db(db: Database, backtest_id: str):
+    """Helper to fetch backtest results from a specific backtest execution."""
+    return await run_db_operation(
+        db.backtest_executions.find_one,
+        {"backtest_id": backtest_id}
+    )
 
 async def get_strategy_for_backtest(
     db: AsyncIOMotorDatabase, 

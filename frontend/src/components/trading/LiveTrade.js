@@ -19,7 +19,8 @@ import {
   Alert,
   CircularProgress,
   Autocomplete,
-  TextField
+  TextField,
+  Stack
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -336,36 +337,38 @@ const LiveTradingPage = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Remove the old Deployment Status Banner section completely */}
-
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: 400 }}>
-            <Typography variant="h6" gutterBottom>Strategy Performance</Typography>
-            {isDeployed && pnlData.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see live performance</Box>)}
-          </Paper>
-        </Grid>
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="h6" gutterBottom>Trading Logs</Typography>
-            <Box sx={{ flexGrow: 1, overflow: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1, backgroundColor: theme.palette.background.default }}>
-              {socketError && <Alert severity="error">{socketError}</Alert>}
-              {logs.map((log, index) => (
-                <Box key={index} sx={{ mb: 0.5, fontSize: '0.875rem', fontFamily: 'monospace' }}>
-                  <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{new Date(log.timestamp).toLocaleTimeString()}</Typography>
-                  <Typography component="span" variant="body2" sx={{ color: log.level === 'WARNING' ? theme.palette.warning.main : theme.palette.info.main, mx: 1 }}>[{log.level}]</Typography>
-                  <Typography component="span" variant="body2">{log.message}</Typography>
-                </Box>
-              ))}
-              {logs.length === 0 && !socketError && (
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.palette.text.secondary }}>
-                  Waiting for logs...
-                </Box>
-              )}
-            </Box>
-          </Paper>
-        </Grid>
-      </Grid>
+      {/* Strategy Performance, Trading Logs, and Current Positions */}
+      <Stack spacing={3} sx={{ mb: 3 }}>
+        <Paper sx={{ p: 2, height: 400 }}>
+          <Typography variant="h6" gutterBottom>Strategy Performance</Typography>
+          {isDeployed && pnlData.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see live performance</Box>)}
+        </Paper>
+        <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
+          <Typography variant="h6" gutterBottom>Trading Logs</Typography>
+          <Box sx={{ flexGrow: 1, overflow: 'auto', border: `1px solid ${theme.palette.divider}`, borderRadius: 1, p: 1, backgroundColor: theme.palette.background.default }}>
+            {socketError && <Alert severity="error">{socketError}</Alert>}
+            {logs.map((log, index) => (
+              <Box key={index} sx={{ mb: 0.5, fontSize: '0.875rem', fontFamily: 'monospace' }}>
+                <Typography component="span" variant="body2" sx={{ color: theme.palette.text.secondary }}>{new Date(log.timestamp).toLocaleTimeString()}</Typography>
+                <Typography component="span" variant="body2" sx={{ color: log.level === 'WARNING' ? theme.palette.warning.main : theme.palette.info.main, mx: 1 }}>[{log.level}]</Typography>
+                <Typography component="span" variant="body2">{log.message}</Typography>
+              </Box>
+            ))}
+            {logs.length === 0 && !socketError && (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.palette.text.secondary }}>
+                Waiting for logs...
+              </Box>
+            )}
+          </Box>
+        </Paper>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>Current Positions</Typography>
+          <Box sx={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.palette.text.secondary, border: `1px solid ${theme.palette.divider}`, borderRadius: 1 }}>
+            {/* You can map over your positions data here to render a table or list */}
+            No open positions
+          </Box>
+        </Paper>
+      </Stack>
 
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>Trade History</Typography>

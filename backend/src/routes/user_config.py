@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/", response_model=Optional[UserConfigResponse])
 async def get_user_config(
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Get user configuration"""
     try:
@@ -54,7 +54,7 @@ async def get_user_config(
 async def save_alpaca_config(
     config_data: dict,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Save Alpaca configuration (paper or live)"""
     try:
@@ -108,7 +108,7 @@ async def save_alpaca_config(
 async def save_polygon_config(
     config_data: dict,
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Save Polygon configuration"""
     try:
@@ -146,7 +146,7 @@ async def save_polygon_config(
 @router.delete("/alpaca")
 async def delete_alpaca_config(
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Delete Alpaca configuration"""
     try:
@@ -179,7 +179,7 @@ async def delete_alpaca_config(
 @router.delete("/polygon")
 async def delete_polygon_config(
     current_user: UserInDB = Depends(get_current_user_from_token),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Delete Polygon configuration"""
     try:

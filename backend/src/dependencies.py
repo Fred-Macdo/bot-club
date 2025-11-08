@@ -13,7 +13,7 @@ load_dotenv(dotenv_path=env_path)
 from pymongo import MongoClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorClient
+from pymongo.database import Database
 from bson import ObjectId
 from jose import JWTError, jwt
 from typing import Optional, AsyncGenerator
@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 client: Optional[MongoClient] = None
 
 # JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY or SECRET_KEY == "your-secret-key-change-this-in-production":
+    raise ValueError("JWT_SECRET_KEY must be set in .env file")
 ALGORITHM = "HS256"
 
 # Security
@@ -78,30 +80,24 @@ async def close_mongo_connection():
         client.close()
         logger.info("MongoDB connection closed")
 
-async def get_db():
-    """Dependency to get database instance"""
-    try:
-        # Make sure to get a client first if it's not already created
-        client = await get_mongodb_client()
-        # Then get the database from the client
-        db = client[os.getenv("MONGO_DB", "bot_club_db")]
-        return db
-    except Exception as e:
-        logger.error(f"Database connection error in get_db: {e}")
+async def get_db() -> AsyncGenerator[Database, None]:
+    """
+    FastAPI dependency that provides a database session.
+    It connects on startup and disconnects on shutdown via the lifespan manager.
+    """
+    # This check ensures that the app's state has been initialized
+    # before any dependency tries to access the database.
+    if not hasattr(db_client, 'database') or db_client.database is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database connection error"
+            status_code=500,
+            detail="Database client is not initialized. Check application startup.",
         )
+    yield db_client.database
 
-async def get_mongodb_client():
-    """Get MongoDB client instance"""
-    mongo_url = get_mongo_url()
-    client = AsyncIOMotorClient(mongo_url)
-    return client
 
 async def get_current_user_from_token(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    token: HTTPAuthorizationCredentials = Depends(security), 
+    db: Database = Depends(get_db)
 ) -> UserInDB:
     """Get current user from JWT token"""
     credentials_exception = HTTPException(
@@ -112,7 +108,7 @@ async def get_current_user_from_token(
     
     try:
         # Decode JWT token
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception

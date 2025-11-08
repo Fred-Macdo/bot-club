@@ -39,16 +39,10 @@ const PrivateRoute = () => {
     );
   }
 
-  // For development purposes, allow access even without authentication
-  if (process.env.NODE_ENV === 'development' && !user) {
-    console.warn('DEV MODE: Bypassing authentication check for development');
-    return <Outlet />;
-  }
-
   // If not authenticated, redirect to login
   if (!user) {
     console.log('Not authenticated, redirecting to login');
-    return <Navigate to="/login" state={{ from: location }} />;
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   console.log('Authentication successful, rendering protected route');

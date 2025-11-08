@@ -9,7 +9,6 @@ httpx>=0.25.0
 pydantic>=2.5.0
 
 # Database
-motor>=3.3.0
 pymongo>=4.6.0
 
 # Environment management
@@ -30,7 +29,7 @@ finta>=1.3
 alpaca-py>=0.42.2
 
 # Trading/Financial libraries
-lumibot==3.18.1
+lumibot==4.1.3
 thetadata==0.9.11
 
 

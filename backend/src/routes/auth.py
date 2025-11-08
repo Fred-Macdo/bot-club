@@ -2,22 +2,25 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from fastapi.responses import RedirectResponse
+from pymongo.database import Database
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+import httpx
 
 from ..dependencies import get_db
 from ..models.user import UserCreate, UserInDB, UserProfile, Token
-from ..crud.user import create_user, get_user_by_email, get_user_by_username
+from ..crud.user import create_user, get_user_by_email, get_user_by_username, create_user_from_google
 from ..crud.strategy import get_strategies_by_user_id
 from ..utils.security import verify_password, create_access_token
+from ..config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 
 router = APIRouter()
 
 @router.post("/register", response_model=UserProfile)
 async def register_user(
     user: UserCreate,
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Register a new user"""
     try:
@@ -57,7 +60,7 @@ async def register_user(
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncIOMotorDatabase = Depends(get_db)
+    db: Database = Depends(get_db)
 ):
     """Authenticate user and return access token"""
     try:        # Try to get user by username or email
@@ -93,4 +96,129 @@ async def login_for_access_token(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Login failed"
+        )
+
+@router.get("/google/login")
+async def google_login(redirect_uri: str, state: str):
+    """
+    Redirect to Google OAuth consent screen
+    
+    Args:
+        redirect_uri: The frontend callback URL
+        state: CSRF protection state parameter
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured"
+        )
+    
+    # Construct Google OAuth URL
+    google_oauth_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={redirect_uri}&"
+        f"response_type=code&"
+        f"scope=openid%20email%20profile&"
+        f"state={state}&"
+        f"access_type=offline&"
+        f"prompt=consent"
+    )
+    
+    return RedirectResponse(url=google_oauth_url)
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str,
+    db: Database = Depends(get_db)
+):
+    """
+    Handle Google OAuth callback and exchange code for token
+    
+    Args:
+        code: Authorization code from Google
+        db: Database connection
+    
+    Returns:
+        Access token and user information
+    """
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Google OAuth is not configured"
+        )
+    
+    try:
+        # Exchange authorization code for tokens
+        async with httpx.AsyncClient() as client:
+            # Get the redirect URI from the frontend
+            redirect_uri = "http://localhost:3000/auth/google/callback"
+            
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                }
+            )
+            
+            if token_response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to exchange code for token: {token_response.text}"
+                )
+            
+            token_data = token_response.json()
+            
+            # Get user info from Google
+            user_info_response = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {token_data['access_token']}"}
+            )
+            
+            if user_info_response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to get user info from Google"
+                )
+            
+            user_info = user_info_response.json()
+        
+        # Find or create user in database
+        email = user_info.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email not provided by Google"
+            )
+        
+        user = await get_user_by_email(db, email)
+        
+        if not user:
+            # Create new user from Google info
+            user = await create_user_from_google(db, user_info)
+            print(f"Created new user from Google OAuth: {email}")
+        else:
+            print(f"Existing user logged in via Google OAuth: {email}")
+        
+        # Generate JWT token for our app
+        access_token = create_access_token(data={"sub": str(user.id)})
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": 1800,  # 30 minutes
+            "user": UserProfile(**user.model_dump())
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Google OAuth callback error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Authentication failed: {str(e)}"
         )

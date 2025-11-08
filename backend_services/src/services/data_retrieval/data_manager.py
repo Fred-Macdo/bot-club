@@ -3,7 +3,7 @@ import logging
 import polars as pl
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import AsyncMongoClient
 
 from .data_providers import DataProviderFactory, BaseDataProvider, AVAILABLE_CRYPTO_ASSETS, TIMEFRAME_MAPPINGS
 from ..utils.date_utils import DateUtils
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class DataManager:
     """Handles all data fetching and caching using DataProviderFactory"""
     
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, db: AsyncMongoClient):
         self.db = db
         self.data_cache = {}
         self.data_provider = None

@@ -23,24 +23,14 @@ class ConditionChecker:
             conditions_met.append(condition_met)
             
         if all(conditions_met):
-            return True, conditions_met, row
+            return True, row
         
-        return False, None, None
-        
+        return False, None
     
     
     def check_exit_conditions(self, conditions: List[Dict], row: Dict[str, Any], position: Position, current_time: datetime) -> bool:
         """Check if exit conditions are met"""
-        if not conditions:
-            # Default exit conditions
-            current_price = row.get('close', position.entry_price)
-            pnl_pct = (current_price - position.entry_price) / position.entry_price
-            
-            # Exit after 10% profit/loss or 5 days
-            if abs(pnl_pct) > 0.1 or position.get_days_held(current_time) > 5:
-                return True
-            return False
-        
+
         conditions_met = []
         for condition in conditions:
             condition_met = self._check_condition(row, condition)

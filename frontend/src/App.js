@@ -6,6 +6,7 @@ import AppRouter from './components/router/AppRouter';
 import { StrategyProvider } from './context/StrategyContext';
 import { AuthProvider } from './components/router/AuthContext';
 import { AlpacaProvider } from './context/AlpacaContext';
+import { DeployedStrategyProvider } from './context/DeployedStrategyContext';
 import { Box } from '@mui/material';
 import ThemeToggle from './components/common/ThemeToggle';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
@@ -124,9 +125,11 @@ function App() {
       <AuthProvider>
         <StrategyProvider>
           <AlpacaProvider>
-            <BrowserRouter>
-              <AppRouter />
-            </BrowserRouter>
+            <DeployedStrategyProvider>
+              <BrowserRouter>
+                <AppRouter />
+              </BrowserRouter>
+            </DeployedStrategyProvider>
           </AlpacaProvider>
         </StrategyProvider>
       </AuthProvider>

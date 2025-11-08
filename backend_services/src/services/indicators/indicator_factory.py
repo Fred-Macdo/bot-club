@@ -20,17 +20,23 @@ class IndicatorFactory:
         with different parameters (e.g., ema_5, ema_10, sma_20, sma_50)
         
         Args:
-            params: Dictionary of indicator parameters
+            params: List of indicator parameter dictionaries
             
         Returns:
             Dictionary with properly keyed indicators
         """
         parsed_params = {}
         
-        for indicator_name, indicator_params in params.items():
-            # Handle indicators that need period-based naming (EMA, SMA)
-            if indicator_name.lower() in ['ema', 'sma']:
-                period = indicator_params.get('period', 20)
+        for indicator in params:
+            indicator_name = indicator.get("name")
+            indicator_params = indicator.get("params", {})
+            if not indicator_name:
+                continue
+
+            # Handle indicators that need period-based naming (e.g., EMA, SMA)
+            # This allows for multiple instances, like ema_5, ema_20
+            if indicator_name.lower() in ['ema', 'sma'] and 'period' in indicator_params:
+                period = indicator_params.get('period')
                 key = f"{indicator_name.lower()}_{period}"
                 parsed_params[key] = indicator_params
             else:
@@ -228,11 +234,11 @@ class IndicatorFactory:
                     expressions.extend(result)
                 else:
                     expressions.append(result)
-        
+
         # Apply all expressions at once for efficiency
         if expressions:
             self.df = self.df.with_columns(expressions)
-        
+            self.df = self._calculate_previous_values()
         return self.df
 
     def _calculate_previous_values(self) -> pl.DataFrame:
@@ -240,7 +246,7 @@ class IndicatorFactory:
         Get all the previous values for close + indicator columns
         '''
         result_df = self.df.clone()
-        exclude_cols = ['open', 'high', 'low', 'volume', 'trade_count', 'vwap'] # don't get prev values
+        exclude_cols = ['open', 'high', 'low', 'trade_count', 'vwap', 'symbol'] # don't get prev values
         prev_col_list = [col for col in result_df.columns if col not in exclude_cols]
         
         # Create expressions for all previous value columns

@@ -19,6 +19,20 @@ const getApiBaseUrl = () => {
   return apiUrl;
 };
 
+// Get WebSocket URL for backend_services (trading WebSocket)
+const getWebSocketUrl = () => {
+  // Check if we have a specific backend_services URL configured
+  const backendServicesUrl = process.env.REACT_APP_BACKEND_SERVICES_URL;
+  
+  if (backendServicesUrl) {
+    // Convert http/https to ws/wss
+    return backendServicesUrl.replace(/^http/, 'ws');
+  }
+  
+  // Default to localhost:8001 for development
+  return 'ws://localhost:8001';
+};
+
 const createApiConfig = () => {
   const baseURL = getApiBaseUrl();
   
@@ -58,6 +72,7 @@ const createApiInstance = () => {
 
 export {
   getApiBaseUrl,
+  getWebSocketUrl,
   createApiConfig,
   getAuthHeaders,
   createApiInstance

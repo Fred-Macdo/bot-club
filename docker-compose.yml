@@ -62,6 +62,7 @@ services:
     environment:
       - NODE_ENV=development
       - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_BACKEND_SERVICES_URL=http://localhost:8001  
     depends_on:
       - backend
     restart: unless-stopped

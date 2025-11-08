@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from bson import ObjectId
 import uuid
 from fastapi import BackgroundTasks, HTTPException
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.database import Database
 import asyncio
 import aiohttp
 import logging
@@ -21,11 +21,11 @@ class BacktestService:
     """
     This class is responsible for creating and retrieving backtests from the database.
     """
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, db: Database):
         """
         Initialize the BacktestService with a MongoDB database instance.
         Args:
-            db (AsyncIOMotorDatabase): MongoDB database instance
+            db (Database): MongoDB database instance
         """
         self.db = db
         self.backtest_engine = BacktestEngine(db=db)
@@ -59,98 +59,59 @@ class BacktestService:
             raise HTTPException(status_code=404, detail="Backtest not found")
         return BacktestResult(**backtest)
 
+    async def get_all_backtests(self, user_id: str):
+        """Get all backtests for a user"""
+        cursor = self.db['backtests'].find({"user_id": user_id})
+        return await cursor.to_list(length=None)
+
+    async def update_backtest_status(self, backtest_id: str, status: str, result: Optional[Dict] = None):
+        """Update the status of a backtest"""
+        update_data = {"status": status}
+        if result:
+            update_data["result"] = result
+        
+        await self.db['backtests'].update_one(
+            {"_id": ObjectId(backtest_id)},
+            {"$set": update_data}
+        )
+    
+    async def run_backtest(self, backtest_params: BacktestParams, background_tasks: BackgroundTasks):
+        """
+        Run a backtest in the background.
+        This method will save the backtest parameters to the database and then
+        schedule the backtest to run in the background.
+        """
+        try:
+            # 1. Create a backtest record in the database
+            backtest_id = await self.create_backtest(backtest_params)
+            
+            # 2. Schedule the backtest to run in the background
+            background_tasks.add_task(
+                self.backtest_engine.run,
+                backtest_id=str(backtest_id),
+                params=backtest_params
+            )
+            
+            return backtest_id
+        except Exception as e:
+            logger.error(f"Error starting backtest: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to start backtest")
+
     async def get_backtest_status(self, backtest_id: str):
         """Get the status of a backtest"""
-        backtest = await self.db['backtest_executions'].find_one({'_id': ObjectId(backtest_id)})
+        backtest = await self.get_backtest(backtest_id)
         if not backtest:
-            return None
-        return {
-            "status": backtest.get("status", "unknown"),
-            "progress": backtest.get("progress", 0),
-            "error": backtest.get("error")
-        }
-
-    async def start_backtest(self, strategy_id: str, user_id: str, params: dict):
-        """Start a new backtest execution"""
-        # Generate a proper ObjectId instead of UUID
-        backtest_id = ObjectId()
-        logger.info(f"Backtest_Service:Backtest ID: {backtest_id}")
-        
-        # Create backtest execution record
-        execution_data = {
-            "_id": backtest_id,
-            "strategy_id": strategy_id,
-            "user_id": user_id,
-            "status": "running",
-            "progress": 0,
-            "params": params,
-            "created_at": datetime.utcnow()
-        }
-        
-        await self.db['backtest_executions'].insert_one(execution_data)
-        
-        # Start the backtest in background
-        asyncio.create_task(self._execute_backtest(str(backtest_id), params))
-        
-        return str(backtest_id)
-
-    async def _execute_backtest(self, backtest_id: str, params: dict):
-        """Execute the backtest in background"""
-        try:
-            # Update status to running
-            await self.db['backtest_executions'].update_one(
-                {"_id": ObjectId(backtest_id)},
-                {"$set": {"status": "running", "progress": 10}}
-            )
-            logger.info(f"Backtest_Service: Backtest ID: {backtest_id}")
-            logger.info(f"Backtest_Service: Params: {params}")
-            logger.info(f"Backtest_Service: Strategy ID: {params['strategy_id']}")
-            logger.info(f"Backtest_Service: User ID: {params['user_id']}")
-            logger.info(f"Backtest_Service: Initial Capital: {params['initial_capital']}")
-            logger.info(f"Backtest_Service: Timeframe: {params['timeframe']}")
-            logger.info(f"Backtest_Service: Start Date: {params['start_date']}")
-            logger.info(f"Backtest_Service: End Date: {params['end_date']}")
-            logger.info(f"Backtest_Service: Data Provider: {params['data_provider']}")
-            logger.info(f"Starting Backtest from backtest_service to backtest_engine now")
-            # Convert params to BacktestParams
-            
-            backtest_params = BacktestParams(
-                strategy_id=params['strategy_id'],
-                user_id=params['user_id'],
-                initial_capital=params['initial_capital'],
-                timeframe=params['timeframe'],
-                start_date=datetime.strptime(params['start_date'], '%Y-%m-%d').date(),
-                end_date=datetime.strptime(params['end_date'], '%Y-%m-%d').date(),
-                data_provider=params['data_provider']
-            )
-            
-            # Run the backtest using the engine
-            result = await self.backtest_engine.run(backtest_params)
-            #logger.info(f"Backtest Service DEBUG: Backtest Result: {type(result)}", "Number of Trades: ", f"{len(result.trades)}")
-            # Save results
-            await self.db['backtests'].insert_one(result.model_dump())
-            
-            # Update execution status
-            await self.db['backtest_executions'].update_one(
-                {"_id": ObjectId(backtest_id)},
-                {"$set": {"status": "completed", "progress": 100, "result_id": str(result.id)}}
-            )
-            
-        except Exception as e:
-            logger.error(f"Backtest execution failed: {e}", exc_info=True)
-            await self.db['backtest_executions'].update_one(
-                {"_id": ObjectId(backtest_id)},
-                {"$set": {"status": "failed", "error": str(e)}}
-            )
+            raise HTTPException(status_code=404, detail="Backtest not found")
+        return {"status": backtest.get("status", "pending"), "result": backtest.get("result")}
 
     async def cancel_backtest(self, backtest_id: str):
         """Cancel a running backtest"""
-        result = await self.db['backtest_executions'].update_one(
-            {"_id": ObjectId(backtest_id), "status": "running"},
-            {"$set": {"status": "cancelled"}}
-        )
-        return result.modified_count > 0
-
+        # This is a simplified implementation. A real implementation would need
+        # to handle the aiohttp task cancellation properly.
+        await self.update_backtest_status(backtest_id, "cancelled")
+        return {"status": "cancelled"}
+    
     async def shutdown(self):
-        """Shutdown the service"""
-        logger.info("Shutting down backtest service")
+        """Shutdown the backtest service"""
+        await self.backtest_engine.shutdown()
+        logger.info("Backtest service shut down")

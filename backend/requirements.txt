@@ -7,7 +7,6 @@ cryptography
 FastAPI[standard]
 SQLAlchemy
 pymongo
-motor
 uvicorn
 python-dotenv
 passlib

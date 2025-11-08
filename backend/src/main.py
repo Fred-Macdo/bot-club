@@ -11,7 +11,8 @@ load_dotenv(dotenv_path=env_path)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
+from pymongo.database import Database
 
 from .routes import auth, user, user_config, strategy, backtest_routes, trading_routes
 from .database.client import db_client
@@ -19,8 +20,8 @@ from .utils.redis_client import redis_client
 from .services.default_strategies import initialize_default_strategies
 
 # Global database client
-motor_client = None
-database = None
+mongo_client: MongoClient | None = None
+database: Database | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,13 +30,13 @@ async def lifespan(app: FastAPI):
     This ensures proper initialization and cleanup of resources.
     """
     # Startup
-    global motor_client, database
+    global mongo_client, database
     
     print("Starting up application...")
     
     # Initialize MongoDB connection
-    motor_client = AsyncIOMotorClient(os.getenv("MONGO_URL", "mongodb://mongo:27017/"))
-    database = motor_client[os.getenv("MONGO_DB_NAME", "bot_club_db")]
+    mongo_client = MongoClient(os.getenv("MONGO_URL", "mongodb://mongo:27017/"))
+    database = mongo_client[os.getenv("MONGO_DB_NAME", "bot_club_db")]
     
     # Store database in app state for dependency injection
     app.state.db = database
@@ -69,8 +70,8 @@ async def lifespan(app: FastAPI):
         print(f"Error disconnecting Redis: {e}")
     
     # Disconnect from MongoDB
-    if motor_client:
-        motor_client.close()
+    if mongo_client:
+        mongo_client.close()
 
 
 # Create FastAPI app with lifespan events
@@ -81,12 +82,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 # --- CORS Middleware Configuration ---
-origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",  # Add additional frontend ports if needed
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-]
+origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,

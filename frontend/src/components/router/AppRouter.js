@@ -5,6 +5,7 @@ import PrivateRoute from '../auth/PrivateRoute';
 import AuthenticatedLayout from '../layout/AuthenticatedLayout';
 import LoginPage from '../auth/LoginPage';
 import RegisterPage from '../auth/RegisterPage';
+import GoogleOAuthCallback from '../auth/GoogleOAuthCallback';
 import Dashboard from '../dashboard/Dashboard';
 import StrategyBuilderPage from '../strategy/StrategyBuilder';
 import Backtest from '../backtest/Backtest';
@@ -22,6 +23,7 @@ const AppRouter = () => {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/auth/google/callback" element={<GoogleOAuthCallback />} />
       <Route path="/api-test" element={<ApiTest />} />
 
       {/* Protected Routes */}

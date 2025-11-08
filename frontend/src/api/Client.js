@@ -9,13 +9,19 @@ class ApiClient {
     // If running in Docker, use empty string to leverage proxy
     // Otherwise use the configured API URL or default to localhost
     this.baseURL = isDocker ? '' : (process.env.REACT_APP_API_URL || 'http://localhost:8000');
+    
+    // Backend services URL (for trading/backtest services)
+    this.backendServicesURL = process.env.REACT_APP_BACKEND_SERVICES_URL || 'http://localhost:8001';
+    
     this.tokenKey = 'authToken'; // Consistent token key across the application
     
     console.log('ApiClient initialized:', {
       environment: process.env.NODE_ENV,
       apiUrl: process.env.REACT_APP_API_URL,
+      backendServicesUrl: process.env.REACT_APP_BACKEND_SERVICES_URL,
       isDocker,
-      baseURL: this.baseURL
+      baseURL: this.baseURL,
+      backendServicesURL: this.backendServicesURL
     });
   }
 
@@ -419,6 +425,19 @@ export const stopStrategy = async (strategyId, mode) => {
       return { success: false, error: error.message };
     }
   };
+
+export const getTradingStatus = async (strategyId) => {
+  try {
+    // Use backendServicesURL directly for trading status endpoint
+    const url = `${apiClient.backendServicesURL}/trading/status/${strategyId}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    console.error(`Error getting trading status for strategy ${strategyId}:`, error);
+    return { success: false, error: error.message };
+  }
+};
 
 export const fetchUserStrategies = async (userId) => {
   try {

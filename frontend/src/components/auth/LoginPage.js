@@ -4,8 +4,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useAuth } from '../router/AuthContext'; // Updated path
 import {
-  Box, Button, TextField, Typography, Paper, Container, Alert, CircularProgress, Link
+  Box, Button, TextField, Typography, Paper, Container, Alert, CircularProgress, Link, Divider, useTheme
 } from '@mui/material';
+import GoogleOAuthButton from './GoogleOAuthButton';
 
 const LoginPage = () => {
   const [username, setUsername] = useState('');
@@ -14,6 +15,7 @@ const LoginPage = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { signIn, user } = useAuth(); // Use the auth hook and get user state
+  const theme = useTheme();
 
   // If already logged in, redirect to dashboard
   useEffect(() => {
@@ -63,7 +65,7 @@ const LoginPage = () => {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#f5edd8', // Light cream background
+        backgroundColor: theme.palette.background.default,
       }}
     >
       <Paper
@@ -73,22 +75,69 @@ const LoginPage = () => {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          backgroundColor: '#07372a', // Dark green card
-          color: '#d4c892',           // Gold text
+          backgroundColor: theme.palette.mode === 'light' 
+            ? theme.palette.primary.main 
+            : theme.palette.background.paper,
+          color: theme.palette.mode === 'light' 
+            ? theme.palette.secondary.main 
+            : theme.palette.text.primary,
           width: '100%',
           maxWidth: '400px',
         }}
       >
-        <Typography component="h1" variant="h5" sx={{ color: '#d4c892', fontWeight: 700, mb: 3 }}>
+        <Typography 
+          component="h1" 
+          variant="h5" 
+          sx={{ 
+            color: theme.palette.mode === 'light' 
+              ? theme.palette.secondary.main 
+              : theme.palette.text.primary,
+            fontWeight: 700, 
+            mb: 3 
+          }}
+        >
           Login
         </Typography>
+        
         {formError && (
           <Alert severity="error" sx={{ mt: 2, width: '100%', mb: 2 }}>
             {formError}
           </Alert>
         )}
+
+        {/* Google OAuth Button */}
+        <Box sx={{ width: '100%', mb: 2 }}>
+          <GoogleOAuthButton
+            onError={(error) => setFormError(error.message)}
+            disabled={loading}
+          />
+        </Box>
+
+        {/* Divider */}
+        <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', my: 2 }}>
+          <Divider sx={{ flex: 1 }} />
+          <Typography sx={{ 
+            px: 2, 
+            color: theme.palette.mode === 'light' 
+              ? theme.palette.secondary.main 
+              : theme.palette.text.secondary,
+            opacity: 0.7, 
+            fontSize: '0.875rem' 
+          }}>
+            OR
+          </Typography>
+          <Divider sx={{ flex: 1 }} />
+        </Box>
+
         <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1, width: '100%' }}>
-          <Typography sx={{ color: '#d4c892', mb: 1 }}>Username *</Typography>
+          <Typography sx={{ 
+            color: theme.palette.mode === 'light' 
+              ? theme.palette.secondary.main 
+              : theme.palette.text.primary,
+            mb: 1 
+          }}>
+            Username *
+          </Typography>
           <TextField
             required
             fullWidth
@@ -102,8 +151,12 @@ const LoginPage = () => {
             variant="outlined"
             InputProps={{
               sx: {
-                backgroundColor: '#f5edd8',
-                color: '#07372a',
+                backgroundColor: theme.palette.mode === 'light' 
+                  ? '#f5edd8' 
+                  : theme.palette.background.default,
+                color: theme.palette.mode === 'light' 
+                  ? theme.palette.primary.main 
+                  : theme.palette.text.primary,
                 '& .MuiOutlinedInput-notchedOutline': {
                   borderColor: 'transparent',
                 },
@@ -112,7 +165,14 @@ const LoginPage = () => {
             sx={{ mb: 3 }}
           />
           
-          <Typography sx={{ color: '#d4c892', mb: 1 }}>Password *</Typography>
+          <Typography sx={{ 
+            color: theme.palette.mode === 'light' 
+              ? theme.palette.secondary.main 
+              : theme.palette.text.primary,
+            mb: 1 
+          }}>
+            Password *
+          </Typography>
           <TextField
             required
             fullWidth
@@ -126,8 +186,12 @@ const LoginPage = () => {
             variant="outlined"
             InputProps={{
               sx: {
-                backgroundColor: '#f5edd8',
-                color: '#07372a',
+                backgroundColor: theme.palette.mode === 'light' 
+                  ? '#f5edd8' 
+                  : theme.palette.background.default,
+                color: theme.palette.mode === 'light' 
+                  ? theme.palette.primary.main 
+                  : theme.palette.text.primary,
                 '& .MuiOutlinedInput-notchedOutline': {
                   borderColor: 'transparent',
                 },
@@ -144,10 +208,12 @@ const LoginPage = () => {
               mt: 1, 
               mb: 2,
               py: 1.5,
-              backgroundColor: '#d4c892',
-              color: '#07372a',
+              backgroundColor: theme.palette.secondary.main,
+              color: theme.palette.primary.main,
               fontWeight: 700,
-              '&:hover': { backgroundColor: '#bfae6a' },
+              '&:hover': { 
+                backgroundColor: theme.palette.mode === 'light' ? '#bfae6a' : '#f0e4b4'
+              },
               textTransform: 'uppercase'
             }}
             disabled={loading}
@@ -162,11 +228,13 @@ const LoginPage = () => {
             onClick={fillDemoCredentials}
             sx={{
               mb: 2,
-              borderColor: '#d4c892',
-              color: '#d4c892',
+              borderColor: theme.palette.secondary.main,
+              color: theme.palette.secondary.main,
               '&:hover': {
-                borderColor: '#f5edd8',
-                backgroundColor: 'rgba(245, 237, 216, 0.1)'
+                borderColor: theme.palette.mode === 'light' ? '#f5edd8' : '#e5d9a3',
+                backgroundColor: theme.palette.mode === 'light' 
+                  ? 'rgba(245, 237, 216, 0.1)' 
+                  : 'rgba(229, 217, 163, 0.1)',
               }
             }}
             disabled={loading}
@@ -175,7 +243,12 @@ const LoginPage = () => {
           </Button>
           
           <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
-            <Link component={RouterLink} to="/register" variant="body2" sx={{ color: '#d4c892' }}>
+            <Link 
+              component={RouterLink} 
+              to="/register" 
+              variant="body2" 
+              sx={{ color: theme.palette.secondary.main }}
+            >
               {"Don't have an account? Register"}
             </Link>
           </Box>

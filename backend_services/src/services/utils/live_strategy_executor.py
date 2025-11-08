@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 import polars as pl
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 
 from ..data_retrieval.data_manager import DataManager, TIMEFRAME_MAPPINGS
 from ..indicators.indicator_factory import IndicatorFactory
@@ -26,7 +26,7 @@ class LiveStrategyExecutor:
 
     def __init__(
         self,
-        db: AsyncIOMotorDatabase,
+        db: Database,
         user_id: str,
         mode: TradingMode,
         strategy: Dict[str, Any],

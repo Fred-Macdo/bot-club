@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from datetime import datetime
 from aiohttp import web
 import json
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 from lumibot.brokers import Alpaca
 from lumibot.traders import Trader
 from bson import ObjectId
@@ -27,18 +28,38 @@ from models.strategy import StrategyConfig
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper()),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format=' %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-def run_strategy_process(strategy_config, alpaca_config, log_queue):
+def run_strategy_process(strategy_config, alpaca_config, log_queue, strategy_id, mongo_url, mongo_db_name, user_id):
     """
-    This function runs in a separate process to execute the trading strategy.
+    Runs a trading strategy in a separate process.
+    Args:
+        strategy_config: The strategy configuration
+        alpaca_config: The Alpaca configuration
+        log_queue: The queue for logging
+        strategy_id: The strategy ID
+        mongo_url: MongoDB connection URL
+        mongo_db_name: MongoDB database name
+        user_id: The user ID
     """
     try:
+        # Create new database connection in this process
+        # (Motor objects can't be pickled for multiprocessing)
+        db_client = AsyncMongoClient(mongo_url)
+        db = db_client[mongo_db_name]
+        
         # Create broker and strategy
         broker = Alpaca(config=alpaca_config)
-        strategy = CryptoStrategy(broker=broker, strategy_config=strategy_config)
+        strategy = CryptoStrategy(
+            broker=broker, 
+            strategy_config=strategy_config,
+            event_queue=log_queue,  # Pass the queue for events
+            strategy_id=strategy_id,  # Pass strategy_id
+            db=db,  # Pass db
+            user_id=user_id  # Pass user_id
+        )
 
         # Configure logging to pass logs back to the main process
         queue_handler = QueueHandler(log_queue)
@@ -66,7 +87,7 @@ class BackendService:
     It is responsible for:
     - Setting up the routes
     - Setting up the middleware
-    - Setting up the services
+    - Setting up the services   
     - Setting up the database
     """
     def __init__(self):
@@ -124,6 +145,19 @@ class BackendService:
 
         await websocket_manager.add_connection(strategy_id, ws)
         logger.info(f"WebSocket connection established for strategy: {strategy_id}")
+        
+        try:
+            # Keep the connection alive by waiting for messages
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    # Handle any client messages if needed
+                    pass
+                elif msg.type == web.WSMsgType.ERROR:
+                    logger.error(f'WebSocket connection closed with exception {ws.exception()}')
+        finally:
+            # Clean up when connection closes
+            websocket_manager.remove_connection(strategy_id, ws)
+            logger.info(f"WebSocket connection closed for strategy: {strategy_id}")
         
         return ws
         
@@ -203,8 +237,12 @@ class BackendService:
             
             strategy_id = data['strategy_id']
             user_id = data['user_id']
+            
+            if strategy_id in self.running_traders:
+                return web.json_response({"error": "Strategy is already running"}, status=400)
+            
             mode = TradingMode(data['mode'])
-            data_provider = data['data_provider']
+            # data_provider = data['data_provider'] # This is not used in the current implementation
 
             # 1. Fetch user credentials from MongoDB
             user_config = await self.db.user_config.find_one({"user_id": user_id})
@@ -216,7 +254,7 @@ class BackendService:
                 api_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_paper_api_key"))
                 secret_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_paper_secret_key"))
                 paper = True
-                logger.info(f"Main Service: Using Alpaca Paper API key: {api_key}")
+                logger.info(f"Main Service: Using Alpaca Paper Trading")
             else: # Live trading
                 api_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_live_api_key"))
                 secret_key = ConfigEncryption.decrypt_value(user_config.get("alpaca_live_secret_key"))
@@ -237,30 +275,28 @@ class BackendService:
 
             if not strategy_config:
                 return web.json_response({"error": "Strategy configuration not found"}, status=404)
+            logger.info(f"Main Service: Strategy configuration found: {strategy_config}")
             
             # Use multiprocessing to run the strategy in a separate process
             log_queue = mp.Queue()
-            process = mp.Process(
-                target=run_strategy_process,
-                args=(strategy_config, ALPACA_CONFIG, log_queue)
-            )
+            process = mp.Process(target=run_strategy_process, 
+                        args=(strategy_config, ALPACA_CONFIG, log_queue, strategy_id, MONGO_URL, MONGO_DB, user_id))
             process.start()
 
-            # Start a listener task to forward logs from the queue to the websocket
+            # Start a task to listen for logs from the process
             log_listener_task = asyncio.create_task(self.log_listener(strategy_id, log_queue))
-
+            
             self.running_traders[strategy_id] = {
                 "process": process,
                 "log_queue": log_queue,
                 "log_listener_task": log_listener_task
             }
-
-            logger.info(f"Trading process started for strategy: {strategy_id} with PID {process.pid}")
+            
             return web.json_response({
                 "status": "trading_started",
                 "strategy_id": strategy_id
             })
-            
+
         except json.JSONDecodeError:
             logger.error("Failed to decode JSON from request body.")
             return web.json_response({"error": "Invalid JSON format"}, status=400)
@@ -269,21 +305,31 @@ class BackendService:
             return web.json_response({"error": str(e)}, status=500)
 
     async def log_listener(self, strategy_id: str, log_queue: mp.Queue):
-        """Listens for log records from a strategy process and forwards them."""
+        """Listens for log records and events from a strategy process and forwards them."""
         loop = asyncio.get_running_loop()
         while True:
             try:
                 # Use run_in_executor to wait for items from the sync queue without blocking
-                log_record = await loop.run_in_executor(None, log_queue.get)
-                if log_record is None:  # Sentinel value to stop
+                item = await loop.run_in_executor(None, log_queue.get)
+                if item is None:  # Sentinel value to stop
                     break
                 
-                log_message = f"{log_record.asctime} | {log_record.levelname} | [{log_record.name}] {log_record.getMessage()}"
-                await websocket_manager.broadcast_to_strategy(strategy_id, log_message)
+                # Check if it's a dict (event) or LogRecord (log)
+                if isinstance(item, dict):
+                    # It's an event (trade, position, or metrics)
+                    await websocket_manager.broadcast(strategy_id, item)
+                else:
+                    # It's a LogRecord - format log data as a structured object for the frontend
+                    log_data = {
+                        "timestamp": item.created * 1000,  # Convert to milliseconds for JavaScript
+                        "level": item.levelname,
+                        "message": item.getMessage()
+                    }
+                    await websocket_manager.broadcast(strategy_id, {"type": "log", "data": log_data})
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in log listener for {strategy_id}: {e}")
+                logger.error(f"Error in log listener for {strategy_id}: {e}", exc_info=True)
         logger.info(f"Log listener for strategy {strategy_id} stopped.")
 
     async def stop_trading(self, request):
@@ -317,11 +363,25 @@ class BackendService:
             return web.json_response({"error": str(e)}, status=500)
 
     async def get_trading_status(self, request):
-        """Get trading status"""
+        """Get trading status for a specific strategy"""
         try:
             strategy_id = request.match_info['strategy_id']
-            result = self.trading_service.get_trading_session_status(strategy_id)
-            return web.json_response(result)
+            
+            # Check if strategy is in running_traders
+            trader_info = self.running_traders.get(strategy_id)
+            
+            if trader_info and trader_info["process"].is_alive():
+                return web.json_response({
+                    "status": "running",
+                    "strategy_id": strategy_id,
+                    "is_running": True
+                })
+            else:
+                return web.json_response({
+                    "status": "stopped",
+                    "strategy_id": strategy_id,
+                    "is_running": False
+                })
             
         except Exception as e:
             logger.error(f"Error getting trading status: {e}", exc_info=True)
@@ -344,7 +404,7 @@ class BackendService:
     async def startup(self):
         # Initialize MongoDB connection
         logger.info(f"Connecting to MongoDB at {MONGO_HOST}:{MONGO_PORT}")
-        self.db_client = AsyncIOMotorClient(MONGO_URL)
+        self.db_client = AsyncMongoClient(MONGO_URL)
         self.db = self.db_client[MONGO_DB]
         logger.info(f"Connected to MongoDB at {MONGO_HOST}:{MONGO_PORT}")
         # Initialize services

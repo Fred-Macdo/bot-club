@@ -6,10 +6,14 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional, Union, Literal
 import yfinance as yf
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
+from lumibot.backtesting import YahooDataBacktesting
+from lumibot.strategies.strategy import Strategy as LumiStrategy
 
 from models.backtest import BacktestParams, BacktestResult
 from models.user_config import ConfigEncryption
+from models.strategy import StrategyConfig
+from services.trading.trading_service import StockStrategy, CryptoStrategy
 from ..data_retrieval.data_manager import DataManager
 from ..utils.strategy_executor import StrategyExecutor
 from ..utils.performance_calculator import PerformanceCalculator
@@ -22,7 +26,7 @@ logger = logging.getLogger(__name__)
 class BacktestEngine:
     """Main backtesting engine orchestrator"""
     
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, db: Database):
         self.db = db
         self.data_manager = DataManager(db)
     
