@@ -14,6 +14,7 @@ from ..models.user_config import (
     UserConfigResponse,
     ConfigEncryption
 )
+from ..utils.db_executor import run_db_operation
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ async def get_user_config(
     """Get user configuration"""
     try:
         # Find user config by user_id
-        config_doc = await db.user_config.find_one({"user_id": str(current_user.id)})
+        config_doc = await run_db_operation(db.user_config.find_one, {"user_id": str(current_user.id)})
         
         if not config_doc:
             return None
@@ -84,7 +85,8 @@ async def save_alpaca_config(
                 update_data["alpaca_live_endpoint"] = config_data["alpaca_live_endpoint"]
         
         # Upsert the configuration to user_config collection
-        result = await db.user_config.update_one(
+        result = await run_db_operation(
+            db.user_config.update_one,
             {"user_id": str(current_user.id)},
             {
                 "$set": update_data,
@@ -123,7 +125,8 @@ async def save_polygon_config(
             update_data["polygon_secret_key"] = ConfigEncryption.encrypt_value(config_data["polygon_secret_key"])
         
         # Upsert the configuration
-        result = await db.user_config.update_one(
+        result = await run_db_operation(
+            db.user_config.update_one,
             {"user_id": str(current_user.id)},
             {
                 "$set": update_data,
@@ -151,7 +154,8 @@ async def delete_alpaca_config(
     """Delete Alpaca configuration"""
     try:
         # Remove Alpaca-related fields
-        result = await db.user_config.update_one(
+        result = await run_db_operation(
+            db.user_config.update_one,
             {"user_id": str(current_user.id)},
             {
                 "$unset": {
@@ -184,7 +188,8 @@ async def delete_polygon_config(
     """Delete Polygon configuration"""
     try:
         # Remove Polygon-related fields
-        result = await db.user_config.update_one(
+        result = await run_db_operation(
+            db.user_config.update_one,
             {"user_id": str(current_user.id)},
             {
                 "$unset": {

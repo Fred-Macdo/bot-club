@@ -136,11 +136,11 @@ async def initialize_default_strategies(db: Database) -> None:
     
     for strategy in DEFAULT_STRATEGIES:
         # Check if this default strategy already exists using its unique key
-        existing = await default_strategies_collection.find_one({"key": strategy["key"]})
+        existing = await run_db_operation(default_strategies_collection.find_one, {"key": strategy["key"]})
         
         if not existing:
             # Strategy doesn't exist, so create it
-            await default_strategies_collection.insert_one({
+            await run_db_operation(default_strategies_collection.insert_one, {
                 **strategy,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
@@ -160,7 +160,10 @@ async def get_default_strategies_from_db(db: Database) -> List[Dict[str, Any]]:
     default_strategies_collection = db["default_strategies"]
     strategies = []
     
-    async for strategy in default_strategies_collection.find({}):
+    cursor = default_strategies_collection.find({})
+    raw_strategies = await run_db_operation(list, cursor)
+    
+    for strategy in raw_strategies:
         # Remove MongoDB-specific fields that shouldn't be exposed
         #strategy.pop("_id", None)
         strategy.pop("key", None)  # Hide internal key from frontend
@@ -185,7 +188,7 @@ async def update_default_strategies_if_needed(db: Database) -> None:
     default_strategies_collection = db["default_strategies"]
     
     for strategy in DEFAULT_STRATEGIES:
-        existing = await default_strategies_collection.find_one({"key": strategy["key"]})
+        existing = await run_db_operation(default_strategies_collection.find_one, {"key": strategy["key"]})
         
         if existing:
             # Create checksums to compare
@@ -194,7 +197,8 @@ async def update_default_strategies_if_needed(db: Database) -> None:
             
             if existing_checksum != new_checksum:
                 # Strategy has changed, update it
-                await default_strategies_collection.update_one(
+                await run_db_operation(
+                    default_strategies_collection.update_one,
                     {"key": strategy["key"]},
                     {
                         "$set": {

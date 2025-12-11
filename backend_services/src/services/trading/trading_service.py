@@ -39,11 +39,12 @@ class StockStrategy(Strategy):
                    db=None,
                    user_id=None):
         
+        self.indicator_converter = IndicatorConverter()
         self.strategy = strategy_config.get("config")
         self.symbols = self.strategy.get('symbols', [])
         self.timeframe = self.strategy.get('timeframe', '1Day') # Default timeframe for stocks
         self.sleeptime = '1M' # Check less frequently for stocks
-        self.params = self.strategy.get('indicators', [])
+        self.params = self.indicator_converter.convert_indicators_to_params(self.strategy.get('indicators', []))
         self.entry_conditions = self.strategy.get('entry_conditions', [])
         self.exit_conditions = self.strategy.get('exit_conditions', [])
         self.risk_management = self.strategy.get('risk_management', {})
@@ -87,6 +88,7 @@ class StockStrategy(Strategy):
             except Exception as e:
                 logger.error(f"Error deleting position from DB: {e}")
         
+
     def on_trading_iteration(self):
         self.log_message(f"Strategy: {self.strategy}")
         self.log_message(f"Symbols: {self.symbols}")
@@ -399,12 +401,13 @@ class CryptoStrategy(Strategy):
                    strategy_id=None,
                    db=None,
                    user_id=None):
-
+        
+        self.indicator_converter = IndicatorConverter()
         self.strategy = strategy_config.get("config")
         self.symbols = self.strategy.get('symbols', [])
         self.timeframe = self.strategy.get('timeframe', '15Min')
         self.sleeptime = '10S'
-        self.params = self.strategy.get('indicators', [])
+        self.params = self.indicator_converter.convert_indicators_to_params(self.strategy.get('indicators', []))
         self.entry_conditions = self.strategy.get('entry_conditions', [])
         self.exit_conditions = self.strategy.get('exit_conditions', [])
         self.risk_management = self.strategy.get('risk_management', {})
@@ -449,16 +452,9 @@ class CryptoStrategy(Strategy):
                 logger.debug(f"Position deleted from DB: {position_id}")
             except Exception as e:
                 logger.error(f"Error deleting position from DB: {e}")
-        
+
     def on_trading_iteration(self):
-        self.log_message(f"Strategy: {self.strategy}")
-        self.log_message(f"Symbols: {self.symbols}")
-        self.log_message(f"Timeframe: {self.timeframe}")
-        self.log_message(f"Sleeptime: {self.sleeptime}")
-        self.log_message(f"Params: {self.params}")
-        self.log_message(f"Entry conditions: {self.entry_conditions}")
-        self.log_message(f"Exit conditions: {self.exit_conditions}")
-        self.log_message(f"Risk management: {self.risk_management}")
+
 
         # Get the cash balance, positions, and portfolio value
         cash = self.get_cash()
@@ -482,6 +478,7 @@ class CryptoStrategy(Strategy):
         # 1. Get the assets
         self.log_message("Getting assets")
         self.log_message(f"Symbols: {self.symbols}")
+        self.log_message(f"Params: {self.params}")
         assets = [Asset(x, asset_type=Asset.AssetType.CRYPTO) for x in self.symbols]
         for asset in assets: 
             # 2. Get the last price for each asset
@@ -635,7 +632,8 @@ class CryptoStrategy(Strategy):
                     self._emit_position_update()
                     self._emit_metrics_update()
         self.log_message("**********************************************************************************")
-
+        self.log_message("**********************************************************************************")
+        self.log_message("**********************************************************************************")
     
     def on_abrupt_closing(self):
         # Sell all positions

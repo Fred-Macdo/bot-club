@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+from .db_executor import run_db_operation
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,6 @@ class TradeLogger:
         symbol: str,
         timestamp: datetime,
         price: float,
-        signal_strength: float = 1.0,
-        conditions_met: List[str] = None,
         strategy_name: str = ""
     ) -> Dict[str, Any]:
         """Log an entry signal"""
@@ -78,8 +77,6 @@ class TradeLogger:
             'timestamp': timestamp,
             'price': round(price, 4),
             'signal_type': 'entry',
-            'signal_strength': signal_strength,
-            'conditions_met': conditions_met or [],
             'strategy_name': strategy_name
         }
         
@@ -171,10 +168,10 @@ class TradeLogger:
                 ]
                 
                 # Insert trades into database
-                result = await db.trades.insert_many(trades_with_backtest_id)
+                result = await run_db_operation(db.trades.insert_many, trades_with_backtest_id)
                 logger.info(f"Saved {len(result.inserted_ids)} trades to database")
                 return True
             return False
         except Exception as e:
             logger.error(f"Error saving trades to database: {e}")
-            return False 
+            return False

@@ -29,12 +29,43 @@ const Row = ({ row, strategy }) => {
   const theme = useTheme();
 
   const equityChartData = useMemo(() => {
-    // Handle the new equity_curve structure with separate arrays
-    if (!backtest.equity_curve || !backtest.equity_curve.timestamps || !backtest.equity_curve.values) {
-      return null;
+    // Handle various equity_curve structures
+    const curve = backtest.equity_curve;
+    if (!curve) return null;
+
+    let timestamps = [];
+    let values = [];
+    let cash = [];
+    let positions_value = [];
+
+    // Case 1: Columnar format (Object with Arrays) - what the component originally expected
+    if (curve.timestamps && Array.isArray(curve.timestamps)) {
+        timestamps = curve.timestamps;
+        values = curve.values;
+        cash = curve.cash;
+        positions_value = curve.positions_value;
+    } 
+    // Case 2: Row-based format (Array of Objects) - standard from backend/mongo
+    else if (Array.isArray(curve)) {
+        if (curve.length === 0) return null;
+        
+        // Sort by time if needed
+        const sortedCurve = [...curve].sort((a, b) => {
+            const t1 = new Date(a.timestamp || a.date || a.time || 0);
+            const t2 = new Date(b.timestamp || b.date || b.time || 0);
+            return t1 - t2;
+        });
+
+        timestamps = sortedCurve.map(pt => pt.timestamp || pt.date || pt.time);
+        values = sortedCurve.map(pt => pt.equity || pt.value || pt.total);
+        cash = sortedCurve.map(pt => pt.cash || 0);
+        positions_value = sortedCurve.map(pt => pt.positions_value || (pt.equity - pt.cash) || 0);
+    } 
+    else {
+        return null;
     }
 
-    const { timestamps, values, cash, positions_value } = backtest.equity_curve;
+    if (!timestamps || timestamps.length === 0) return null;
 
     console.log('Creating chart for backtest ID:', backtest.backtest_id);
     console.log('Equity curve data points:', timestamps.length);
@@ -110,14 +141,18 @@ const Row = ({ row, strategy }) => {
           </IconButton>
         </TableCell>
         <TableCell>{strategy?.name || backtest.strategy_name || 'N/A'}</TableCell>
-        <TableCell>1D</TableCell> {/* Timeframe not in new structure, using default */}
+        <TableCell>{backtest.timeframe || '1D'}</TableCell>
         <TableCell align="right">{metrics.total_return?.toFixed(2) ?? 'N/A'}%</TableCell>
         <TableCell align="right">{metrics.max_drawdown?.toFixed(2) ?? 'N/A'}%</TableCell>
         <TableCell align="right">{metrics.win_rate?.toFixed(2) ?? 'N/A'}%</TableCell>
         <TableCell align="right">{metrics.total_trades ?? 'N/A'}</TableCell>
-        <TableCell>{new Date().toLocaleDateString()}</TableCell> {/* Created date not in new structure */}
-        <TableCell>2025-01-01</TableCell> {/* Start date not in new structure */}
-        <TableCell>2025-05-31</TableCell> {/* End date not in new structure */}
+        <TableCell>
+          {backtest.created_at 
+            ? new Date(backtest.created_at).toLocaleDateString() 
+            : new Date().toLocaleDateString()}
+        </TableCell>
+        <TableCell>{backtest.start_date || 'N/A'}</TableCell>
+        <TableCell>{backtest.end_date || 'N/A'}</TableCell>
       </TableRow>
       <TableRow>
         <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={10}>

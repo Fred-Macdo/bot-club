@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Union
 from pydantic import BaseModel, Field
 from bson import ObjectId
 
@@ -30,7 +30,7 @@ class BacktestResult(BaseModel):
     end_date: str = Field(..., description="Backtest end date")
     timeframe: str = Field(..., description="Backtest timeframe")
     trades: List[Dict[str, Any]] = Field(default_factory=list, description="Individual trade details")
-    equity_curve: List[Dict[str, Any]] = Field(default_factory=list, description="Equity curve data")
+    equity_curve: Union[List[Dict[str, Any]], Dict[str, List[Any]]] = Field(default_factory=list, description="Equity curve data")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:

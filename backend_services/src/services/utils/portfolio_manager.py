@@ -156,3 +156,7 @@ class Portfolio(BaseModel):
             self.positions[symbol] = [p for p in self.positions[symbol] if p.position_id != position_id]
             if not self.positions[symbol]:
                 del self.positions[symbol]
+
+    def get_equity_curve(self) -> List[Dict[str, Any]]:
+        """Returns the history of equity values over time."""
+        return self.equity_history

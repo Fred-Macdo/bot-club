@@ -1,5 +1,9 @@
 import polars as pl
+import logging
+
 import polars_talib as plta
+
+logger = logging.getLogger(__name__)
 
 class IndicatorFactory:
     def __init__(self, df, params=None):
@@ -13,6 +17,7 @@ class IndicatorFactory:
         self.df = df.clone()
         # Parse and organize parameters to handle multiple indicators of same type
         self.params = self._parse_indicator_params(params) if params else self._get_default_params()
+        
 
     def _parse_indicator_params(self, params):
         """
@@ -26,12 +31,10 @@ class IndicatorFactory:
             Dictionary with properly keyed indicators
         """
         parsed_params = {}
-        
-        for indicator in params:
-            indicator_name = indicator.get("name")
-            indicator_params = indicator.get("params", {})
-            if not indicator_name:
-                continue
+        logger.info(f" DEBUG:IndicatorFactory._parse_indicator_params: Params type: {type(params)}")
+        logger.info(f" DEBUG:IndicatorFactory._parse_indicator_params: Parsing indicator parameters: {params}")
+        for indicator_name, indicator_params in params.items()  :
+            
 
             # Handle indicators that need period-based naming (e.g., EMA, SMA)
             # This allows for multiple instances, like ema_5, ema_20

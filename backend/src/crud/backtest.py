@@ -21,8 +21,13 @@ from ..utils.mongo_helpers import PyObjectId
 BACKTEST_COLLECTION = "backtest"
 STRATEGY_COLLECTION = "strategy"
 
+def execute_aggregate(collection, pipeline):
+    """Helper to execute aggregation synchronously in thread"""
+    cursor = collection.aggregate(pipeline)
+    return list(cursor)
+
 async def create_backtest(
-    db: AsyncIOMotorDatabase, 
+    db: Database, 
     user_id: Union[str, PyObjectId], 
     backtest_data: dict
 ) -> Backtest:
@@ -46,10 +51,10 @@ async def create_backtest(
     
     try:
         backtest = Backtest(**backtest_data)
-        result = await backtest_collection.insert_one(backtest.dict(by_alias=True))
+        result = await run_db_operation(backtest_collection.insert_one, backtest.dict(by_alias=True))
         
         # Retrieve the created backtest
-        created_backtest = await backtest_collection.find_one({"_id": result.inserted_id})
+        created_backtest = await run_db_operation(backtest_collection.find_one, {"_id": result.inserted_id})
         print(f"DEBUG CRUD: Created backtest with ID: {result.inserted_id}")
         
         return Backtest(**created_backtest)
@@ -58,7 +63,7 @@ async def create_backtest(
         raise
 
 async def get_backtest_by_id(
-    db: AsyncIOMotorDatabase, 
+    db: Database, 
     backtest_id: Union[str, PyObjectId],
     user_id: Union[str, PyObjectId]
 ) -> Optional[Backtest]:
@@ -74,7 +79,7 @@ async def get_backtest_by_id(
         user_id = PyObjectId(user_id)
     
     try:
-        backtest_doc = await backtest_collection.find_one({
+        backtest_doc = await run_db_operation(backtest_collection.find_one, {
             "_id": backtest_id,
             "user_id": user_id
         })
@@ -87,7 +92,7 @@ async def get_backtest_by_id(
         return None
 
 async def get_backtests_by_user_id(
-    db: AsyncIOMotorDatabase, 
+    db: Database, 
     user_id: Union[str, PyObjectId],
     limit: int = 50,
     skip: int = 0
@@ -129,10 +134,11 @@ async def get_backtests_by_user_id(
             {"$limit": limit}
         ]
         
-        cursor = backtest_collection.aggregate(pipeline)
-        backtests = []
+        # Run aggregation in thread pool using helper
+        backtests_raw = await run_db_operation(execute_aggregate, backtest_collection, pipeline)
         
-        async for backtest_doc in cursor:
+        backtests = []
+        for backtest_doc in backtests_raw:
             backtest_doc["id"] = str(backtest_doc["_id"])
             del backtest_doc["_id"]
             backtests.append(BacktestSummary(**backtest_doc))
@@ -144,7 +150,7 @@ async def get_backtests_by_user_id(
         return []
 
 async def get_backtests_by_strategy_id(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     strategy_id: Union[str, PyObjectId],
     user_id: Union[str, PyObjectId],
     limit: int = 10
@@ -189,10 +195,10 @@ async def get_backtests_by_strategy_id(
             {"$limit": limit}
         ]
         
-        cursor = backtest_collection.aggregate(pipeline)
-        backtests = []
+        backtests_raw = await run_db_operation(execute_aggregate, backtest_collection, pipeline)
         
-        async for backtest_doc in cursor:
+        backtests = []
+        for backtest_doc in backtests_raw:
             backtest_doc["id"] = str(backtest_doc["_id"])
             del backtest_doc["_id"]
             backtests.append(BacktestSummary(**backtest_doc))
@@ -203,7 +209,7 @@ async def get_backtests_by_strategy_id(
         return []
 
 async def update_backtest(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     backtest_id: Union[str, PyObjectId],
     user_id: Union[str, PyObjectId],
     update_data: dict
@@ -222,13 +228,13 @@ async def update_backtest(
     try:
         update_data["updated_at"] = datetime.utcnow()
         
-        result = await backtest_collection.update_one(
+        result = await run_db_operation(backtest_collection.update_one,
             {"_id": backtest_id, "user_id": user_id},
             {"$set": update_data}
         )
         
         if result.modified_count > 0:
-            updated_backtest = await backtest_collection.find_one({"_id": backtest_id})
+            updated_backtest = await run_db_operation(backtest_collection.find_one, {"_id": backtest_id})
             return Backtest(**updated_backtest)
         return None
     except Exception as e:
@@ -236,7 +242,7 @@ async def update_backtest(
         return None
 
 async def delete_backtest(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     backtest_id: Union[str, PyObjectId],
     user_id: Union[str, PyObjectId]
 ) -> bool:
@@ -252,7 +258,7 @@ async def delete_backtest(
         user_id = PyObjectId(user_id)
     
     try:
-        result = await backtest_collection.delete_one({
+        result = await run_db_operation(backtest_collection.delete_one, {
             "_id": backtest_id,
             "user_id": user_id
         })
@@ -263,7 +269,7 @@ async def delete_backtest(
         return False
 
 async def get_backtest_count_by_user(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     user_id: Union[str, PyObjectId]
 ) -> int:
     """Get total backtest count for a user"""
@@ -273,26 +279,26 @@ async def get_backtest_count_by_user(
         user_id = PyObjectId(user_id)
     
     try:
-        count = await backtest_collection.count_documents({"user_id": user_id})
+        count = await run_db_operation(backtest_collection.count_documents, {"user_id": user_id})
         return count
     except Exception as e:
         print(f"DEBUG CRUD: Error counting backtests: {e}")
         return 0
 
 async def create_backtest_execution(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     execution: BacktestExecution
 ) -> str:
     """Create a new backtest execution record"""
     collection = db["backtest_executions"]
     
     execution_dict = execution.dict(by_alias=True)
-    result = await collection.insert_one(execution_dict)
+    result = await run_db_operation(collection.insert_one, execution_dict)
     
     return str(result.inserted_id)
 
 async def update_backtest_execution(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     backtest_id: str,
     update_data: dict
 ) -> bool:
@@ -301,7 +307,7 @@ async def update_backtest_execution(
     
     update_data["updated_at"] = datetime.utcnow()
     
-    result = await collection.update_one(
+    result = await run_db_operation(collection.update_one,
         {"_id": ObjectId(backtest_id)},
         {"$set": update_data}
     )
@@ -309,14 +315,14 @@ async def update_backtest_execution(
     return result.modified_count > 0
 
 async def get_backtest_execution(
-    db: AsyncIOMotorDatabase,
+    db: Database,
     backtest_id: str,
     user_id: str
 ) -> Optional[BacktestExecution]:
     """Get backtest execution by ID"""
     collection = db["backtest_executions"]
     
-    execution_data = await collection.find_one({
+    execution_data = await run_db_operation(collection.find_one, {
         "_id": ObjectId(backtest_id),
         "user_id": ObjectId(user_id)
     })
@@ -333,13 +339,14 @@ async def get_backtest_results_from_db(db: Database, backtest_id: str):
     )
 
 async def get_strategy_for_backtest(
-    db: AsyncIOMotorDatabase, 
+    db: Database, 
     strategy_id_str: str, 
     user_id: ObjectId
 ) -> Optional[Dict[str, Any]]:
     # Add debug logging to see exactly what we're searching for
     print(f"\n[DEBUG] Searching for strategy with ID: {strategy_id_str}")
-    print(f"[DEBUG] Collection names: {await db.list_collection_names()}\n")
+    collections = await run_db_operation(db.list_collection_names)
+    print(f"[DEBUG] Collection names: {collections}\n")
     
     try:
         strategy_obj_id = ObjectId(strategy_id_str)
@@ -348,7 +355,7 @@ async def get_strategy_for_backtest(
         return None
 
     # Check the 'strategy' collection (singular)
-    user_strategy = await db.strategy.find_one({
+    user_strategy = await run_db_operation(db.strategy.find_one, {
         "_id": strategy_obj_id,
         "$or": [
             {"user_id": user_id},
@@ -361,7 +368,7 @@ async def get_strategy_for_backtest(
         return user_strategy
 
     # If not found in 'strategy', try 'strategies' (plural) as fallback
-    user_strategy_plural = await db.strategies.find_one({
+    user_strategy_plural = await run_db_operation(db.strategies.find_one, {
         "_id": strategy_obj_id,
         "$or": [
             {"user_id": user_id},
@@ -374,7 +381,7 @@ async def get_strategy_for_backtest(
         return user_strategy_plural
 
     # Try default strategies collection
-    default_strategy = await db.default_strategies.find_one(
+    default_strategy = await run_db_operation(db.default_strategies.find_one,
         {"_id": strategy_obj_id}
     )
     

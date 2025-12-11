@@ -38,7 +38,7 @@ import {
   deployStrategy,
   stopStrategy,
 } from '../../api/Client';
-import useTradingSocket from '../../hooks/useTradingSocket';
+// import useTradingSocket from '../../hooks/useTradingSocket'; // Removed
 
 const transformDefaultStrategies = (backendStrategies) => {
   return backendStrategies.map((strategy, index) => {
@@ -106,10 +106,19 @@ const PaperTradingPage = () => {
     deployedStrategy,
     isDeployed,
     dataProvider,
+    mode, // Added mode
     deploymentTime,
     deployStrategy: deployStrategyContext,
     stopStrategy: stopStrategyContext,
-    setDataProvider
+    setDataProvider,
+    // Data from socket
+    logs,
+    socketStatus,
+    socketError,
+    trades,
+    completedTrades,
+    positions,
+    metrics
   } = useDeployedStrategy();
   
   // Local state for UI
@@ -117,7 +126,7 @@ const PaperTradingPage = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [pnlData, setPnlData] = useState([]); // Add this line
   const [currentPnL, setCurrentPnL] = useState(0); // Add this line
-  const [positions, setPositions] = useState([]); // Add state for positions
+  const [positionsState, setPositions] = useState([]); // Renamed to avoid conflict with context
 
   const handleDataProviderChange = (event) => {
     setDataProvider(event.target.value);
@@ -132,36 +141,25 @@ const PaperTradingPage = () => {
   }, [deployedStrategy, selectedStrategy]);
   
   // State from our new WebSocket hook
-  const { 
-    logs, 
-    status: socketStatus, 
-    error: socketError,
-    trades: liveTrades,
-    completedTrades,
-    positions: wsPositions, // Renamed to avoid conflict with local state
-    metrics 
-  } = useTradingSocket(isDeployed ? selectedStrategy?.id : null);
-
-  // Update P&L data and current P&L when metrics change
-  useEffect(() => {
-    if (metrics) {
-      setCurrentPnL(metrics.totalPnL || 0);
-      setPnlData(prev => [
-        ...prev,
-        {
-          timestamp: new Date(metrics.timestamp),
-          value: metrics.totalPnL || 0
-        }
-      ].slice(-100)); // Keep last 100 data points
-    }
-  }, [metrics]);
+  // useEffect(() => {
+  //   if (metrics) {
+  //     setCurrentPnL(metrics.totalPnL || 0);
+  //     setPnlData(prev => [
+  //       ...prev,
+  //       {
+  //         timestamp: new Date(metrics.timestamp),
+  //         value: metrics.totalPnL || 0
+  //       }
+  //     ].slice(-100)); // Keep last 100 data points
+  //   }
+  // }, [metrics]);
 
   // Update positions state when websocket data changes
   useEffect(() => {
-    if (wsPositions) {
-      setPositions(wsPositions);
+    if (positions) {
+      setPositions(positions);
     }
-  }, [wsPositions]);
+  }, [positions]);
 
   // Combine and format all strategies
   const allStrategies = useMemo(() => {
@@ -647,7 +645,7 @@ const PaperTradingPage = () => {
           <Typography variant="h6" gutterBottom>Current Positions</Typography>
           <Box sx={{ height: 250, width: '100%' }}>
             <DataGrid
-              rows={positions}
+              rows={positionsState}
               columns={positionColumns}
               getRowId={(row) => row.symbol} // Use symbol as the unique ID
               pageSizeOptions={[5]}

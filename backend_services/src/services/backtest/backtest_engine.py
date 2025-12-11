@@ -66,9 +66,14 @@ class BacktestEngine:
             symbols, 
             params.start_date, 
             params.end_date, 
-            timeframe        )
+            params.timeframe
+        )
         
-        portfolio = Portfolio(initial_capital=params.initial_capital)
+        # FIX: Set cash equal to initial_capital
+        portfolio = Portfolio(
+            initial_capital=params.initial_capital, 
+            cash=params.initial_capital
+        )
         
         await strategy_executor.execute_strategy(strategy, data, portfolio)
 

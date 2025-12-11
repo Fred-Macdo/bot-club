@@ -41,7 +41,8 @@ class BacktestService:
 
     async def create_backtest(self, backtest_params: BacktestParams):
         """Create a new backtest"""
-        backtest_data = backtest_params.model_dump()
+        # Use mode='json' to convert date objects to strings for MongoDB
+        backtest_data = backtest_params.model_dump(mode='json')
         result = await self.db['backtests'].insert_one(backtest_data)
         logger.info(f"Backtest created with ID: {result.inserted_id}")
 
@@ -75,27 +76,56 @@ class BacktestService:
             {"$set": update_data}
         )
     
-    async def run_backtest(self, backtest_params: BacktestParams, background_tasks: BackgroundTasks):
+    async def run_backtest(self, strategy_id: str, user_id: str, params: Dict[str, Any]):
         """
-        Run a backtest in the background.
-        This method will save the backtest parameters to the database and then
-        schedule the backtest to run in the background.
+        Run a backtest in the background using asyncio.create_task.
+        Compatible with both aiohttp and FastAPI contexts.
         """
+        # Convert params to BacktestParams
+        params['strategy_id'] = strategy_id
+        params['user_id'] = user_id
+        
         try:
-            # 1. Create a backtest record in the database
-            backtest_id = await self.create_backtest(backtest_params)
-            
-            # 2. Schedule the backtest to run in the background
-            background_tasks.add_task(
-                self.backtest_engine.run,
-                backtest_id=str(backtest_id),
-                params=backtest_params
-            )
-            
-            return backtest_id
+            backtest_params = BacktestParams(**params)
         except Exception as e:
-            logger.error(f"Error starting backtest: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to start backtest")
+            logger.error(f"Invalid backtest params: {e}")
+            raise
+            
+        # Create record
+        backtest_id = await self.create_backtest(backtest_params)
+        
+        # Define wrapper to run engine and save result
+        async def run_and_save():
+            try:
+                await self.update_backtest_status(str(backtest_id), "running")
+                
+                # Run the backtest and get the result
+                result = await self.backtest_engine.run(params=backtest_params)
+                
+                # Convert result to dictionary
+                result_dict = result.model_dump(mode='json', exclude={'id'})
+                
+                # Update the DB record with the result metrics
+                update_data = {
+                    "status": "completed",
+                    "completed_at": datetime.utcnow(),
+                    **result_dict
+                }
+                
+                await self.db['backtests'].update_one(
+                    {"_id": backtest_id},
+                    {"$set": update_data}
+                )
+                logger.info(f"Backtest {backtest_id} completed and results saved.")
+                
+            except Exception as e:
+                logger.error(f"Backtest {backtest_id} failed: {e}", exc_info=True)
+                await self.update_backtest_status(str(backtest_id), "failed", {"error": str(e)})
+
+        # Start task using asyncio (works in both aiohttp and FastAPI)
+        asyncio.create_task(run_and_save())
+        
+        return str(backtest_id)
 
     async def get_backtest_status(self, backtest_id: str):
         """Get the status of a backtest"""

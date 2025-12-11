@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 from bson import ObjectId
 
@@ -50,15 +50,22 @@ class PerformanceCalculator:
                     formatted_trade[key] = round(float(formatted_trade[key]), 2)
             formatted_trades.append(formatted_trade)
         
-        # Format equity curve with 2 decimal precision
-        formatted_equity_curve = []
+        # Transform equity curve to column-oriented format for frontend
+        formatted_equity_curve = {
+            "timestamps": [],
+            "values": [],
+            "cash": [],
+            "positions_value": []
+        }
+        
+        # Sort by time to ensure chronological order
+        equity_curve.sort(key=lambda x: x.get('time') or x.get('date'))
+
         for point in equity_curve:
-            formatted_point = point.copy()
-            # Round all numeric fields to 2 decimal places
-            for key in ['equity', 'cash', 'positions_value', 'trade_pnl']:
-                if key in formatted_point and formatted_point[key] is not None:
-                    formatted_point[key] = round(float(formatted_point[key]), 2)
-            formatted_equity_curve.append(formatted_point)
+            formatted_equity_curve["timestamps"].append(point.get("time") or point.get("date"))
+            formatted_equity_curve["values"].append(round(float(point.get("equity", 0)), 2))
+            formatted_equity_curve["cash"].append(round(float(point.get("cash", 0)), 2))
+            formatted_equity_curve["positions_value"].append(round(float(point.get("positions_value", 0)), 2))
         
         return BacktestResult(
             strategy_id=strategy_id,

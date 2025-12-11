@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI):
     # Store database in app state for dependency injection
     app.state.db = database
     
+    # Also update db_client for dependencies.py to work
+    db_client.database = database
+    db_client.client = mongo_client
+    db_client._connected = True
+    
     # Initialize Redis connection
     try:
         await redis_client.connect()

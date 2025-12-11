@@ -86,7 +86,7 @@ async def login_for_access_token(
         return {
             "access_token": access_token,
             "token_type": "bearer",
-            "expires_in": 1800  # 30 minutes
+            "expires_in": 180000  # 30 minutes
         }
         
     except HTTPException:

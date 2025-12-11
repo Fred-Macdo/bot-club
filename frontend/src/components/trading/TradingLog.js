@@ -1,8 +1,9 @@
 import React from 'react';
-import useTradingSocket from '../../hooks/useTradingSocket';
+import { useDeployedStrategy } from '../../context/DeployedStrategyContext';
 
-const TradingLog = ({ strategyId }) => {
-  const { logs, status, error } = useTradingSocket(strategyId);
+const TradingLog = () => {
+  // No longer needs strategyId prop, it uses the global active strategy
+  const { logs, socketStatus, socketError } = useDeployedStrategy();
 
   return (
     <div style={{ 
@@ -18,9 +19,9 @@ const TradingLog = ({ strategyId }) => {
     }}>
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         <div style={{ marginBottom: '0.5rem' }}>
-          <strong>Status:</strong> <span style={{ color: status === 'connected' ? '#48bb78' : '#f56565' }}>{status}</span>
+          <strong>Status:</strong> <span style={{ color: socketStatus === 'connected' ? '#48bb78' : '#f56565' }}>{socketStatus}</span>
         </div>
-        {error && <div style={{ color: '#f56565', marginBottom: '0.5rem' }}><strong>Error:</strong> {error}</div>}
+        {socketError && <div style={{ color: '#f56565', marginBottom: '0.5rem' }}><strong>Error:</strong> {socketError}</div>}
         
         {logs.map((log, index) => (
           <div key={index} style={{ whiteSpace: 'pre-wrap', marginBottom: '0.25rem' }}>

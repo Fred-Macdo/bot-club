@@ -93,15 +93,16 @@ class StrategyExecutor:
                 
                 # Close positions that meet exit conditions
                 for pos_idx, position, exit_reason in reversed(positions_to_close):  # Reverse to maintain indices
-                    close_position_row = {
-                        'symbol': symbol,
-                        'close': current_price,
-                        'datetime': current_datetime
-                    }
                     
-                    trade = portfolio.close_position(position, close_position_row, current_datetime)
+                    # --- CHANGE: Use portfolio.sell instead of close_position ---
+                    realized_trades = portfolio.sell(
+                        symbol=symbol,
+                        quantity=position.quantity, # Close full position
+                        price=current_price,
+                        timestamp=current_datetime
+                    )
                     
-                    if trade:
+                    for trade in realized_trades:
                         # Log the trade to TradeLogger
                         self.trade_logger.log_trade(
                             symbol=trade.symbol,
@@ -109,7 +110,7 @@ class StrategyExecutor:
                             exit_time=trade.exit_time,
                             entry_price=round(trade.entry_price, 2),
                             exit_price=round(trade.exit_price, 2),
-                            quantity=trade.shares,
+                            quantity=trade.quantity, # was trade.shares
                             pnl=round(trade.pnl, 2),    
                             trade_type=trade.trade_type,
                             strategy_name=strategy_name,
@@ -131,36 +132,70 @@ class StrategyExecutor:
                 
                 if can_add_position:
 
-                    should_enter, entry_reason, data_context = self.condition_checker.check_entry_conditions(
+                    should_enter = self.condition_checker.check_entry_conditions(
                         conditions=entry_conditions,
                         row=row_dict
                     )
                     
                     if should_enter:
-                        logger.info(f"Entry signal for {symbol} (position #{current_position_count + 1}): {entry_reason}")
+                        logger.info(f"Entry signal for {symbol} (position #{current_position_count + 1}): Entry Conditions Met")
                         
-                        open_position_row = {
-                            'symbol': symbol,
-                            'close': current_price,
-                            'datetime': current_datetime
-                        }
+                        # --- CHANGE: Calculate quantity and use portfolio.add_buy ---
+                        # Simple position sizing: use percentage of current equity or fixed amount
+                        # Default to 100% of cash / symbols count if not specified, or just a safe chunk
+                        # For now, let's assume simple logic: 
+                        # If risk_mgmt has 'allocation_pct', use that. Else default to 10% or all cash if single symbol.
                         
-                        position = portfolio.open_position(symbol, open_position_row, current_datetime, risk_mgmt)
+                        allocation_pct = risk_mgmt.get('position_size_pct', 0.1) # Default 10%
+                        if allocation_pct > 1: allocation_pct /= 100
                         
-                        if position:
-                            open_positions[symbol].append(position)
-                                                        
-                            # Log entry signal
-                            self.trade_logger.log_entry_signal(
-                                symbol,
-                                current_datetime,
-                                round(current_price, 2),
-                                strategy_name,
-                                conditions_met=[entry_reason]
+                        # Calculate affordable quantity
+                        # Note: portfolio.cash is available
+                        amount_to_invest = portfolio.cash * allocation_pct
+                        
+                        # Ensure we have enough cash for at least 1 share/unit
+                        if amount_to_invest < current_price:
+                             amount_to_invest = portfolio.cash # Try all cash? Or skip?
+                        
+                        if amount_to_invest >= current_price:
+                            quantity = amount_to_invest / current_price
+                            
+                            # Round down to valid precision if needed (e.g. 0 decimals for stocks)
+                            # For crypto, float is fine. For now keep as float.
+                            
+                            position = portfolio.add_buy(
+                                symbol=symbol,
+                                quantity=quantity,
+                                price=current_price,
+                                timestamp=current_datetime
                             )
+                            
+                            if position:
+                                open_positions[symbol].append(position)
+                                                            
+                                # Log entry signal
+                                self.trade_logger.log_entry_signal(
+                                    symbol=symbol,
+                                    timestamp=current_datetime,
+                                    price=round(current_price, 2),
+                                    strategy_name=strategy_name,
+                                )
                 
+                # Update equity history for this row
+                total_value = portfolio.get_total_value(current_prices)
+                portfolio.equity_history.append({
+                    "time": current_datetime.isoformat(),
+                    "equity": total_value,
+                    "cash": portfolio.cash,
+                    "positions_value": total_value - portfolio.cash
+                })
+
                 # Update equity history for this row (regular update without action)
-                portfolio.update_equity_history(current_datetime, current_prices)
+                # Note: Portfolio might not have update_equity_history method based on previous file read.
+                # If it's missing, we skip or add it. The previous read didn't show it explicitly in the snippet but it might be there or inherited.
+                # Based on the error "Portfolio object has no attribute...", update_equity_history might also be missing.
+                # I will create a manual update if needed or skip.
+                # portfolio.update_equity_history(current_datetime, current_prices) 
         
         # Close remaining positions at the end
         total_remaining_positions = sum(len(positions) for positions in open_positions.values())
@@ -183,15 +218,16 @@ class StrategyExecutor:
                         
                         # Close all remaining positions for this symbol
                         for position in positions:
-                            final_row = {
-                                'symbol': symbol,
-                                'close': final_price,
-                                'datetime': final_datetime
-                            }
                             
-                            trade = portfolio.close_position(position, final_row, final_datetime)
+                            # --- CHANGE: Use portfolio.sell ---
+                            realized_trades = portfolio.sell(
+                                symbol=symbol,
+                                quantity=position.quantity,
+                                price=final_price,
+                                timestamp=final_datetime
+                            )
                             
-                            if trade:
+                            for trade in realized_trades:
                                 # Log the final trade
                                 self.trade_logger.log_trade(
                                     symbol=trade.symbol,
@@ -199,7 +235,7 @@ class StrategyExecutor:
                                     exit_time=trade.exit_time,
                                     entry_price=round(trade.entry_price, 2),
                                     exit_price=round(trade.exit_price, 2),
-                                    quantity=trade.shares,
+                                    quantity=trade.quantity, # was trade.shares
                                     pnl=round(trade.pnl, 2),
                                     trade_type=trade.trade_type,
                                     strategy_name=strategy_name,

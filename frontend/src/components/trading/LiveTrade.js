@@ -37,7 +37,7 @@ import {
   deployStrategy,
   stopStrategy,
 } from '../../api/Client';
-import useTradingSocket from '../../hooks/useTradingSocket';
+import { useDeployedStrategy } from '../../context/DeployedStrategyContext';
 
 const transformDefaultStrategies = (backendStrategies) => {
   return backendStrategies.map((strategy, index) => {
@@ -100,23 +100,37 @@ const LiveTradingPage = () => {
     refreshStrategies 
   } = useStrategy();
   
-  // State for strategy selection and deployment
+  // Access Global Context
+  const {
+    deployedStrategy,
+    isDeployed,
+    mode, // Check if we are in 'live' mode
+    deployStrategy: contextDeploy,
+    stopStrategy: contextStop,
+    // Data from socket
+    logs,
+    socketStatus,
+    socketError,
+    trades: liveTrades,
+    metrics,
+    positions
+  } = useDeployedStrategy();
+
+  // Local state for setup only
   const [selectedStrategy, setSelectedStrategy] = useState(null);
   const [dataProvider, setDataProvider] = useState('alpaca');
-  const [isDeployed, setIsDeployed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  
+
   const handleDataProviderChange = (event) => {
     setDataProvider(event.target.value);
   };
-  
-  // State from our new WebSocket hook
-  const { logs, status: socketStatus, error: socketError } = useTradingSocket(selectedStrategy?.id);
 
-  // State for trading data
-  const [pnlData, setPnlData] = useState([]);
-  const [trades, setTrades] = useState([]);
-  const [currentPnL, setCurrentPnL] = useState(0);
+  // Sync: If a LIVE strategy is already deployed globally, show it
+  useEffect(() => {
+    if (isDeployed && mode === 'live' && deployedStrategy) {
+      setSelectedStrategy(deployedStrategy);
+    }
+  }, [isDeployed, mode, deployedStrategy]);
 
   // Handle pre-selected strategy from URL parameters
   useEffect(() => {
@@ -169,17 +183,14 @@ const LiveTradingPage = () => {
     
     try {
       const result = await deployStrategy(selectedStrategy.id, 'live', dataProvider);
-      setIsDeployed(true);
-      if (!result.success) {
-        // Handle error, maybe show an alert
-        console.error("Deployment failed:", result.error);
+      if (result.success) {
+        // Tell context to start listening (this starts the socket)
+        contextDeploy(selectedStrategy, dataProvider, 'live'); 
+      } else {
         alert(`Deployment failed: ${result.error}`);
       }
-      // On success, the WebSocket will connect and update the status,
-      // which will set isDeployed to true via the useEffect hook.
     } catch (error) {
-      console.error('Deployment error:', error);
-      alert(`Deployment failed: ${error.message}`);
+      console.error(error);
     } finally {
       setIsLoading(false);
     }
@@ -197,7 +208,7 @@ const LiveTradingPage = () => {
       const result = await stopStrategy(selectedStrategy.id);
 
       if (result.success) {
-        setIsDeployed(false); // Add this line
+        contextStop(); // Tell context to stop listening
         console.log('Stop command sent successfully.');
       } else {
         console.error('Failed to stop strategy:', result.error);
@@ -226,7 +237,7 @@ const LiveTradingPage = () => {
     { field: 'status', headerName: 'Status', width: 100, renderCell: (params) => (<Chip label={params.value} color={params.value === 'OPEN' ? 'warning' : 'default'} size="small"/>) }
   ];
 
-  const pnlPlotData = [{ x: pnlData.map(d => d.timestamp), y: pnlData.map(d => d.value), type: 'scatter', mode: 'lines', name: 'P&L', line: { color: currentPnL >= 0 ? theme.palette.success.main : theme.palette.error.main, width: 2 } }];
+  const pnlPlotData = [{ x: logs.map(d => d.timestamp), y: logs.map(d => d.value), type: 'scatter', mode: 'lines', name: 'P&L', line: { color: logs.length > 0 ? (logs[logs.length - 1].value >= 0 ? theme.palette.success.main : theme.palette.error.main) : theme.palette.text.secondary, width: 2 } }];
   const pnlPlotLayout = { title: 'Live P&L', xaxis: { title: 'Time' }, yaxis: { title: 'P&L ($)', tickformat: '$,.0f' }, plot_bgcolor: theme.palette.background.paper, paper_bgcolor: theme.palette.background.paper, font: { color: theme.palette.text.primary }, margin: { l: 60, r: 30, b: 50, t: 50 } };
 
   return (
@@ -304,7 +315,7 @@ const LiveTradingPage = () => {
             </Box>
             {isDeployed && (
               <Box sx={{ width: '100%', mt: 2 }}>
-                <Alert severity="info">Current P&L: <strong>${currentPnL.toFixed(2)}</strong></Alert>
+                <Alert severity="info">Current P&L: <strong>${logs.length > 0 ? logs[logs.length - 1].value : '0.00'}</strong></Alert>
               </Box>
             )}
           </Box>
@@ -341,7 +352,7 @@ const LiveTradingPage = () => {
       <Stack spacing={3} sx={{ mb: 3 }}>
         <Paper sx={{ p: 2, height: 400 }}>
           <Typography variant="h6" gutterBottom>Strategy Performance</Typography>
-          {isDeployed && pnlData.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see live performance</Box>)}
+          {isDeployed && logs.length > 1 ? (<Plot data={pnlPlotData} layout={pnlPlotLayout} style={{ width: '100%', height: '320px' }} config={{ responsive: true, displaylogo: false }}/>) : (<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '320px', color: theme.palette.text.secondary }}>Deploy a strategy to see live performance</Box>)}
         </Paper>
         <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>
           <Typography variant="h6" gutterBottom>Trading Logs</Typography>
@@ -373,7 +384,7 @@ const LiveTradingPage = () => {
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>Trade History</Typography>
         <Box sx={{ height: 400, width: '100%' }}>
-          <DataGrid rows={isDeployed ? trades : []} columns={tradeColumns} pageSize={5} rowsPerPageOptions={[5]} disableSelectionOnClick sx={{ '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } }} />
+          <DataGrid rows={isDeployed ? liveTrades : []} columns={tradeColumns} pageSize={5} rowsPerPageOptions={[5]} disableSelectionOnClick sx={{ '& .MuiDataGrid-cell': { borderColor: theme.palette.divider }, '& .MuiDataGrid-columnHeaders': { backgroundColor: theme.palette.background.default, borderColor: theme.palette.divider } }} />
         </Box>
       </Paper>
     </Container>
