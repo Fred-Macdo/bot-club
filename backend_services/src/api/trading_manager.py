@@ -108,6 +108,7 @@ class TradingManager:
         Returns True if started successfully, False if already running.
         """
         if strategy_id in self.running_traders:
+            logger.warning(f"Strategy {strategy_id} is already running.")
             return False
         
         log_queue = mp.Queue()

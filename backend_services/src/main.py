@@ -9,17 +9,20 @@ This module initializes and runs the backend service with:
 """
 import asyncio
 import logging
-from aiohttp import web
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pymongo import AsyncMongoClient
+import uvicorn
 
 from config import (
     MONGO_HOST, MONGO_PORT, MONGO_URL, MONGO_DB, LOG_LEVEL, SERVICE_PORT
 )
 from services.backtest.backtest_service import BacktestService
-from api.routes import setup_routes
-from api.trading_manager import trading_manager
+from services.utils.websocket_manager import websocket_manager
+from api.routers import health, backtest, trading, websocket
 from api.celery_trading_manager import celery_trading_manager
-
 
 # Configure logging
 logging.basicConfig(
@@ -36,14 +39,10 @@ class BackendService:
     """
     
     def __init__(self):
-        self.app = web.Application()
         self.db_client = None
         self.db = None
         self.backtest_service = None
         self.trading_service = None
-        
-        # Setup routes with self as app_state
-        setup_routes(self.app, self)
 
     async def startup(self):
         """Initialize database and services."""
@@ -57,6 +56,16 @@ class BackendService:
         logger.info("Initializing backtest service")
         self.backtest_service = BacktestService(self.db)
         await self.backtest_service.initialize()
+        
+        # Initialize WebSocket manager (connects to Redis for pub/sub)
+        logger.info("Initializing WebSocket manager")
+        try:
+            # Assuming websocket_manager has an initialize method, if not, we can skip or check
+            if hasattr(websocket_manager, 'initialize'):
+                await websocket_manager.initialize()
+        except Exception as e:
+            logger.error(f"Failed to initialize WebSocket manager: {e}")
+            logger.warning("WebSocket manager will initialize lazily on first connection")
 
         logger.info("Backend service started successfully")
 
@@ -67,6 +76,10 @@ class BackendService:
         # Stop all running traders
         await celery_trading_manager.stop_all()
         
+        # Shutdown WebSocket manager
+        if hasattr(websocket_manager, 'shutdown'):
+            await websocket_manager.shutdown()
+        
         # Shutdown backtest service
         if self.backtest_service:
             await self.backtest_service.shutdown()
@@ -76,30 +89,44 @@ class BackendService:
             self.db_client.close()
             logger.info("Database connection closed")
 
+service = BackendService()
 
-async def main():
-    """Application entry point."""
-    service = BackendService()
-    
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await service.startup()
+    app.state.db_client = service.db_client
+    app.state.db = service.db
+    app.state.backtest_service = service.backtest_service
+    # app.state.trading_service = service.trading_service # Not initialized in startup?
     
-    runner = web.AppRunner(service.app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', SERVICE_PORT)
+    yield
     
-    try:
-        logger.info(f"Starting backend service on port {SERVICE_PORT}")
-        await site.start()
-        
-        # Keep the service running
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logger.info("Shutting down...")
-    finally:
-        await service.cleanup()
-        await runner.cleanup()
+    await service.cleanup()
 
+app = FastAPI(lifespan=lifespan)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal Server Error"},
+    )
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(health.router)
+app.include_router(backtest.router)
+app.include_router(trading.router)
+app.include_router(websocket.router)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run("main:app", host="0.0.0.0", port=int(SERVICE_PORT), reload=True)

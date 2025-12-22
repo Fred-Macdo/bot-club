@@ -13,7 +13,8 @@ from lumibot.strategies.strategy import Strategy as LumiStrategy
 from models.backtest import BacktestParams, BacktestResult
 from models.user_config import ConfigEncryption
 from models.strategy import StrategyConfig
-from services.trading.trading_service import StockStrategy, CryptoStrategy
+from services.trading.crypto_strategy import CryptoStrategy
+from services.trading.stock_strategy import StockStrategy
 from ..data_retrieval.data_manager import DataManager
 from ..utils.strategy_executor import StrategyExecutor
 from ..utils.performance_calculator import PerformanceCalculator
@@ -94,5 +95,8 @@ class BacktestEngine:
         
         strategy_executor.trade_logger.clear_trades()
         
-
         return backtest_result
+    
+    def shutdown(self):
+        """Clean up resources if needed."""
+        pass

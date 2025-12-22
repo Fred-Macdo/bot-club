@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 class BacktestStatus(str, Enum):
@@ -25,5 +25,4 @@ class BacktestExecution(BaseModel):
     params: Dict[str, Any] = Field(..., description="Backtest parameters")
     result: Optional[Dict[str, Any]] = Field(None, description="Backtest result")
     
-    class Config:
-        validate_by_name = True
+    model_config = ConfigDict(validate_by_name=True)

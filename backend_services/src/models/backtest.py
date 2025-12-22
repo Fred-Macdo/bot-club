@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from typing import List, Any, Dict, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from bson import ObjectId
 
 class BacktestParams(BaseModel):
@@ -33,6 +33,4 @@ class BacktestResult(BaseModel):
     equity_curve: Union[List[Dict[str, Any]], Dict[str, List[Any]]] = Field(default_factory=list, description="Equity curve data")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    class Config:
-        validate_by_name = True
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(validate_by_name=True, arbitrary_types_allowed=True)

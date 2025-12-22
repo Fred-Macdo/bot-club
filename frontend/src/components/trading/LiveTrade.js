@@ -107,6 +107,7 @@ const LiveTradingPage = () => {
     mode, // Check if we are in 'live' mode
     deployStrategy: contextDeploy,
     stopStrategy: contextStop,
+    setDeploymentState, // Added new method from context
     // Data from socket
     logs,
     socketStatus,
@@ -184,8 +185,24 @@ const LiveTradingPage = () => {
     try {
       const result = await deployStrategy(selectedStrategy.id, 'live', dataProvider);
       if (result.success) {
-        // Tell context to start listening (this starts the socket)
-        contextDeploy(selectedStrategy, dataProvider, 'live'); 
+        // Tell context to start listening (this starts the socket) using task_id
+        const taskId = result.data.task_id;
+        if (!taskId) {
+            console.error("Warning: No task_id returned from deployment response");
+        }
+        // Assuming contextDeploy is updated or we use setDeploymentState if exposed
+        // If contextDeploy is just an alias for deployStrategy in context:
+        // contextDeploy(selectedStrategy, dataProvider, 'live'); 
+        
+        // BETTER: Use setDeploymentState if available (need to import or get from context)
+        // Check if context exposes setDeploymentState
+        if (typeof setDeploymentState === 'function') {
+             setDeploymentState(selectedStrategy, taskId, dataProvider, 'live');
+        } else {
+             // Fallback if context not updated yet, but this might fail WS connection if it expects task_id
+             contextDeploy(selectedStrategy, dataProvider, 'live'); 
+        }
+        
       } else {
         alert(`Deployment failed: ${result.error}`);
       }

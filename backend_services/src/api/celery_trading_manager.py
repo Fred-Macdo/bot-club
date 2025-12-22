@@ -6,8 +6,9 @@ import logging
 import json
 import redis.asyncio as aioredis
 from typing import Dict, Any, Optional
-
+import uuid
 from celery.result import AsyncResult
+from redis import Redis
 
 # Import config and app
 from config import REDIS_URL
@@ -29,6 +30,9 @@ class CeleryTradingManager:
         # Maps strategy_id -> { "task_id": str, "listener_task": asyncio.Task }
         self.running_traders: Dict[str, Dict[str, Any]] = {}
         self.redis_client: Optional[aioredis.Redis] = None
+
+        # Sync Redis client for management operations
+        self.redis = Redis.from_url(REDIS_URL, decode_responses=True)
 
     async def initialize(self):
         """Initialize Redis connection for log listening."""
@@ -73,7 +77,7 @@ class CeleryTradingManager:
             "is_running": False
         }
 
-    async def start_strategy(
+    def start_strategy(
         self,
         strategy_id: str,
         strategy_config: Dict,
@@ -86,36 +90,52 @@ class CeleryTradingManager:
         """
         if self.is_running(strategy_id):
             return False
-
-        # Ensure Redis is connected
-        if not self.redis_client:
-            await self.initialize()
-            
+          
         # Determine queue based on paper trading setting
         is_paper = alpaca_config.get('PAPER', True)
         queue_name = 'paper_trading' if is_paper else 'live_trading'
 
         # Start Celery task
-        task = run_live_strategy.apply_async(
+        task_func = run_live_strategy
+        task = task_func.apply_async(
             args=(strategy_config, alpaca_config, strategy_id, user_id),
             task_id=f"strategy-{strategy_id}",
             queue=queue_name
         )
         
+        # Add debug logging
+        logger.info(f"DEBUG: Dispatched Celery task {task.id} for strategy {strategy_id} on queue {queue_name}")
+        logger.info(f"DEBUG: Task state: {task.state}")
+        
         # Start Redis log listener for this strategy
-        listener_task = asyncio.create_task(
-            self._redis_log_listener(strategy_id)
-        )
+        # NOTE: With WebSocketManager now listening to task:{task_id} directly, 
+        # we might not need this listener if the frontend connects via task_id.
+        # But if the frontend connects via strategy_id (legacy), we need a bridge.
+        # However, run_live_strategy publishes to task:{task_id}.
+        # So strategy:{strategy_id} channel receives nothing unless we double-publish.
+        # 
+        # The frontend IS connecting via task_id now (see DeployedStrategyContext.js changes).
+        # The backend WebSocketHandler uses WebSocketManager which subscribes to task:{task_id}.
+        # So the flow is:
+        # Worker -> Redis (task:{task_id}) -> WebSocketManager -> WebSocket -> Frontend
+        #
+        # This listener below subscribes to strategy:{strategy_id} which is EMPTY.
+        # We can remove it or keep it as a no-op placeholder.
+        # Removing the task creation to save resources.
+        
+        # listener_task = asyncio.create_task(
+        #     self._redis_log_listener(strategy_id)
+        # )
         
         self.running_traders[strategy_id] = {
             "task_id": task.id,
-            "listener_task": listener_task
+            # "listener_task": listener_task 
         }
         
         logger.info(f"Started strategy task {task.id} for {strategy_id} on queue {queue_name}")
         return True
 
-    async def stop_strategy(self, strategy_id: str) -> bool:
+    def stop_strategy(self, strategy_id: str) -> bool:
         """
         Stop a running strategy task.
         Returns True if stopped successfully.
@@ -130,9 +150,10 @@ class CeleryTradingManager:
         celery_app.control.revoke(task_id, terminate=True)
         logger.info(f"Revoked task {task_id} for strategy {strategy_id}")
         
-        # Stop listener
-        if "listener_task" in trader_info:
+        # Stop listener if it exists
+        if "listener_task" in trader_info and trader_info["listener_task"]:
             trader_info["listener_task"].cancel()
+            logger.info(f"Log listener cancelled for {strategy_id}")
             
         del self.running_traders[strategy_id]
         return True
@@ -142,40 +163,6 @@ class CeleryTradingManager:
         for strategy_id in list(self.running_traders.keys()):
             await self.stop_strategy(strategy_id)
         self.running_traders.clear()
-
-    async def _redis_log_listener(self, strategy_id: str):
-        """
-        Subscribes to Redis Pub/Sub channel for the strategy and forwards messages to WebSocket.
-        """
-        channel = f"strategy:{strategy_id}"
-        pubsub = self.redis_client.pubsub()
-        
-        try:
-            await pubsub.subscribe(channel)
-            logger.info(f"Subscribed to Redis channel: {channel}")
-            
-            async for message in pubsub.listen():
-                if message['type'] == 'message':
-                    try:
-                        data = json.loads(message['data'])
-                        # Forward directly to WebSocket manager
-                        await websocket_manager.broadcast(strategy_id, data)
-                    except json.JSONDecodeError:
-                        logger.error(f"Invalid JSON from Redis for {strategy_id}: {message['data']}")
-                        
-        except asyncio.CancelledError:
-            logger.info(f"Log listener cancelled for {strategy_id}")
-        except Exception as e:
-            logger.error(f"Error in log listener for {strategy_id}: {e}", exc_info=True)
-        finally:
-            # Cleanup
-            try:
-                if self.redis_client:  # Check if client still exists
-                    await pubsub.unsubscribe(channel)
-                    await pubsub.close()
-            except Exception as e:
-                logger.error(f"Error closing Redis pubsub: {e}")
-            logger.info(f"Log listener stopped for {strategy_id}")
 
 
 # Singleton instance

@@ -111,6 +111,7 @@ const PaperTradingPage = () => {
     deployStrategy: deployStrategyContext,
     stopStrategy: stopStrategyContext,
     setDataProvider,
+    setDeploymentState, // Get new method
     // Data from socket
     logs,
     socketStatus,
@@ -140,21 +141,7 @@ const PaperTradingPage = () => {
     }
   }, [deployedStrategy, selectedStrategy]);
   
-  // State from our new WebSocket hook
-  // useEffect(() => {
-  //   if (metrics) {
-  //     setCurrentPnL(metrics.totalPnL || 0);
-  //     setPnlData(prev => [
-  //       ...prev,
-  //       {
-  //         timestamp: new Date(metrics.timestamp),
-  //         value: metrics.totalPnL || 0
-  //       }
-  //     ].slice(-100)); // Keep last 100 data points
-  //   }
-  // }, [metrics]);
 
-  // Update positions state when websocket data changes
   useEffect(() => {
     if (positions) {
       setPositions(positions);
@@ -204,9 +191,13 @@ const PaperTradingPage = () => {
         console.error("Deployment failed:", result.error);
         alert(`Deployment failed: ${result.error}`);
       } else {
-        // Save to context (which persists to localStorage)
-        deployStrategyContext(selectedStrategy, dataProvider);
-        console.log('Strategy deployed successfully');
+        // Save to context using task_id from response
+        const taskId = result.data.task_id;
+        if (!taskId) {
+            console.error("Warning: No task_id returned from deployment response");
+        }
+        setDeploymentState(selectedStrategy, taskId, dataProvider, 'paper');
+        console.log('Strategy deployed successfully, task ID:', taskId);
       }
       
     } catch (error) {

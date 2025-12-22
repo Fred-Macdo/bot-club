@@ -359,6 +359,27 @@ export const tradingApi = {
   async stopTrading(strategyId) {
     console.log(`tradingApi.stopTrading() called for strategy ${strategyId}`);
     return apiClient.post('/api/trading/stop', { strategy_id: strategyId });
+  },
+
+  async getActiveSessions(userId) {
+    const url = `${apiClient.backendServicesURL}/trading/active?user_id=${userId}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to get active sessions: ${response.status} ${response.statusText}`);
+    }
+    return await response.json();
+  },
+
+  async getSessionDetails(strategyId, userId) {
+    let url = `${apiClient.backendServicesURL}/trading/session/${strategyId}`;
+    if (userId) {
+      url += `?user_id=${userId}`;
+    }
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to get session details: ${response.status} ${response.statusText}`);
+    }
+    return await response.json();
   }
 };
 
@@ -409,7 +430,8 @@ export const deployStrategy = async (strategyId, mode, dataProvider) => {
     };
     console.log('deployStrategy payload:', payload);
     const response = await apiClient.post('/api/trading/run', payload);
-    return { success: true, data: response.data };
+    // Return the response data directly, which now includes task_id
+    return { success: true, data: response }; 
   } catch (error) {
     console.error(`Error deploying ${mode} strategy:`, error);
     return { success: false, error: error.response?.data?.detail || error.message };
