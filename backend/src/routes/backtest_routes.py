@@ -46,9 +46,10 @@ async def run_backtest_async(
     start_date: str,
     end_date: str,
     data_provider: str,
-    db: Database
+    db: Database,
+    backtest_service
 ):
-    """Run backtest asynchronously and update progress in Redis"""
+    """Run backtest asynchronously using BacktestService"""
     try:
         # Update status to running
         await redis_client.hset(f"backtest:{backtest_id}", mapping={
@@ -57,56 +58,55 @@ async def run_backtest_async(
             "user_id": user_id
         })
         
-        # Call backend services to run the backtest
-        try:
-            backend_services_url = "http://backend_services:8001"  # Docker service name
-            backtest_payload = {
-                "strategy_id": str(strategy_config.get('_id', strategy_config.get('id', ''))),
-                "user_id": user_id,
-                "initial_capital": initial_capital,
-                "start_date": start_date,
-                "end_date": end_date,
-                "timeframe": timeframe,
-                "data_provider": data_provider
-            }
+        # Call BacktestService directly (no HTTP proxy)
+        backtest_params = {
+            "strategy_id": str(strategy_config.get('_id', strategy_config.get('id', ''))),
+            "user_id": user_id,
+            "initial_capital": initial_capital,
+            "start_date": start_date,
+            "end_date": end_date,
+            "timeframe": timeframe,
+            "data_provider": data_provider
+        }
+        
+        logger.info(f"Running backtest with params: {backtest_params}")
+        
+        # Call BacktestService directly
+        service_backtest_id = await backtest_service.run_backtest(
+            strategy_id=backtest_params["strategy_id"],
+            user_id=backtest_params["user_id"],
+            params=backtest_params
+        )
+        
+        # Poll for completion
+        max_wait = 300  # 5 minutes timeout
+        wait_interval = 2
+        elapsed = 0
+        
+        while elapsed < max_wait:
+            status = await backtest_service.get_status(service_backtest_id)
+            if status.get("status") == "completed":
+                results = status.get("results", {})
+                break
+            elif status.get("status") == "failed":
+                raise Exception(f"Backtest failed: {status.get('error')}")
             
-            print(f"Calling backend_services with payload: {backtest_payload}")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{backend_services_url}/backtest/run",
-                    json=backtest_payload,
-                    timeout=300 # Backtests can take a while
-                )
-            
-            if response.status_code == 200:
-                # Backend services will handle the execution
-                results = response.json()
-                print(f"Backend services response: {results}")
-                
-                # Update status to completed
-                await redis_client.hset(f"backtest:{backtest_id}", mapping={
-                    "status": "completed",
-                    "progress": 100
-                })
-            else:
-                raise Exception(f"Backend services error: {response.text}")
-                
-        except httpx.RequestError as e:
-            raise Exception(f"Error calling backend_services: {e}")
-        except ImportError:
-            # Fallback to mock implementation if requests is not available
-            print("Warning: requests module not available, using mock implementation")
-            
-            # Simulate backtest execution
-            await asyncio.sleep(1)  # Simulate processing time
-            
-            
-            # Update status to completed
+            await asyncio.sleep(wait_interval)
+            elapsed += wait_interval
+            progress = min(90, (elapsed / max_wait) * 100)
             await redis_client.hset(f"backtest:{backtest_id}", mapping={
-                "status": "completed",
-                "progress": 100
+                "progress": int(progress)
             })
+        else:
+            raise Exception("Backtest timeout")
+        
+        logger.info(f"Backtest results: {results}")
+            
+        # Update status to completed
+        await redis_client.hset(f"backtest:{backtest_id}", mapping={
+            "status": "completed",
+            "progress": 100
+        })
         
         # Save results to database
         strategy_name = strategy_config.get("name", "Unknown Strategy")
@@ -166,7 +166,7 @@ async def run_backtest(
 
     This endpoint initiates a backtest asynchronously. It validates the request,
     loads the specified strategy, and schedules the backtest to run in the
-    background.
+    background using BacktestService directly.
 
     Args:
         request: The backtest run request containing parameters like strategy_id,
@@ -179,6 +179,15 @@ async def run_backtest(
     Returns:
         A response containing the unique backtest_id and a confirmation message.
     """
+    # Import here to access app state
+    from fastapi import Request
+    from ..main import app
+    
+    # Get backtest_service from app state
+    backtest_service = app.state.backtest_service if hasattr(app.state, 'backtest_service') else None
+    if not backtest_service:
+        raise HTTPException(status_code=503, detail="Backtest service not available")
+    
     # Validate dates
     try:
         start = datetime.strptime(request.start_date, '%Y-%m-%d')
@@ -197,12 +206,12 @@ async def run_backtest(
             raise HTTPException(status_code=404, detail="Default strategy not found")
     else:
         # Load user strategy from database
-        print(
-        "current_user: ", current_user.userName, '\n',
-        "type: ", type(current_user), '\n',
-        "current_user_id", current_user.id, '\n',
-        "strategy_id: ", request.strategy_id, '\n',
-        "type_strategy_id", type(request.strategy_id)
+        logger.info(
+        f"current_user: {current_user.userName}\n"
+        f"type: {type(current_user)}\n"
+        f"current_user_id: {current_user.id}\n"
+        f"strategy_id: {request.strategy_id}\n"
+        f"type_strategy_id: {type(request.strategy_id)}"
         )
 
         strategy = await run_db_operation(db.strategy.find_one, {
@@ -219,7 +228,7 @@ async def run_backtest(
     # Generate backtest ID
     backtest_id = str(uuid.uuid4())
     
-    # Start backtest in background
+    # Start backtest in background with BacktestService
     background_tasks.add_task(
         run_backtest_async,
         backtest_id,
@@ -230,7 +239,8 @@ async def run_backtest(
         request.start_date,
         request.end_date,
         request.data_provider,
-        db
+        db,
+        backtest_service
     )
     
     return BacktestRunResponse(

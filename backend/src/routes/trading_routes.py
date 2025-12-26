@@ -1,4 +1,3 @@
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Literal
@@ -7,14 +6,10 @@ from ..dependencies import get_current_user_from_token
 from ..models.user import User
 from ..models.strategy import Strategy, AccountTypeEnum, StatusEnum
 import logging
-from ..config import BACKEND_SERVICES_URL
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# This should match the service name and port in your docker-compose.yml    
-# Corrected 'backend-services' to 'backend_services'
 
 
 class TradingRequest(BaseModel):
@@ -28,8 +23,11 @@ async def start_trading(
     current_user: User = Depends(get_current_user_from_token)
 ):
     """
-    Starts live or paper trading for a given strategy.
+    Starts live or paper trading for a given strategy using CeleryTradingManager directly.
     """
+    from ..main import app
+    from ..api.celery_trading_manager import celery_trading_manager
+    
     try:
         payload = {
             "strategy_id": trading_request.strategy_id,
@@ -37,17 +35,23 @@ async def start_trading(
             "mode": trading_request.mode,
             "data_provider": trading_request.data_provider
         }
-        logger.info(f"DEBUG TRADING: Trading request payload: {payload}")
+        logger.info(f"Starting trading with payload: {payload}")
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_SERVICES_URL}/trading/run", json=payload, timeout=30)
-            response.raise_for_status()  # Raise an exception for bad status codes
-            return response.json()
+        # Call CeleryTradingManager directly instead of HTTP proxy
+        result = await celery_trading_manager.start_trading(
+            strategy_id=payload["strategy_id"],
+            user_id=payload["user_id"],
+            mode=payload["mode"],
+            data_provider=payload["data_provider"]
+        )
+        
+        return result
             
-    except httpx.RequestError as e:
+    except Exception as e:
+        logger.error(f"Failed to start trading: {e}")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to communicate with trading service: {e}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start trading: {str(e)}"
         )
 
 class StopTradingRequest(BaseModel):
@@ -59,20 +63,28 @@ async def stop_trading(
     current_user: User = Depends(get_current_user_from_token)
 ):
     """
-    Stops a running live or paper trading strategy.
+    Stops a running live or paper trading strategy using CeleryTradingManager directly.
     """
+    from ..api.celery_trading_manager import celery_trading_manager
+    
     try:
         payload = {
             "strategy_id": trading_request.strategy_id,
             "user_id": str(current_user.id)
         }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_SERVICES_URL}/trading/stop", json=payload, timeout=30)
-            response.raise_for_status()
-            return response.json()
+        logger.info(f"Stopping trading with payload: {payload}")
+        
+        # Call CeleryTradingManager directly instead of HTTP proxy
+        result = await celery_trading_manager.stop_trading(
+            strategy_id=payload["strategy_id"],
+            user_id=payload["user_id"]
+        )
+        
+        return result
             
-    except httpx.RequestError as e:
+    except Exception as e:
+        logger.error(f"Failed to stop trading: {e}")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to communicate with trading service: {e}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to stop trading: {str(e)}"
         ) 

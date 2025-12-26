@@ -1,31 +1,57 @@
-lumibot
-aiohttp>=3.9.0
-# Redis for async operations
-redis>=5.0.0
-# Security
-cryptography
+# Core async web framework
+aiohttp>=3.11.0
+loguru>=0.7.2
+
+# HTTP client for API calls
+httpx>=0.28.0
+requests
+
+# Web framework
+fastapi>=0.115.0
 FastAPI[standard]
+uvicorn>=0.34.0
+
+# Data validation
+pydantic>=2.10.0
+pydantic[email,timezone]
+
+# Database
+pymongo>=4.10.0
+motor==3.7.1
 SQLAlchemy
-pymongo
-uvicorn
-python-dotenv
+
+# Environment management
+python-dotenv>=1.0.1
+
+# Security and Auth
+cryptography
 passlib
 bcrypt
 python-multipart
-python-jose
+python-jose[cryptography]
 email-validator
 PyJWT
-python-jose[cryptography]
-httpx
-requests
-PyYAML
-pydantic[email,timezone]
+
+# Redis and task queue
+redis==7.1.0
+celery[redis]>=5.4.0
+flower>=2.0.1
+
+# Technical analysis
+polars-talib>=0.1.5
+ta-lib>=0.5.1
+finta>=1.3
+
+# Trading/Financial libraries
+alpaca-py==0.42.2
+lumibot==4.1.3
+
+# Data processing
 pandas
 numpy
 yfinance
-motor==3.7.1
-pytest
-pytest-asyncio
+PyYAML
 
+# Testing
 pytest
 pytest-asyncio
