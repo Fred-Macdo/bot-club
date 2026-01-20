@@ -1,9 +1,8 @@
 import os
 
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017/")
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "bot_club_db")
-BACKEND_SERVICES_URL = os.getenv("BACKEND_SERVICES_URL", "http://backend_services:8001")
-
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 # Google OAuth2 Configuration
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")

@@ -5,15 +5,8 @@ from bson import ObjectId
 
 from ..dependencies import get_db, get_current_user_from_token
 from ..models.user import UserInDB
-from ..models.strategy import (
-    Strategy,
-    StrategyCreate,
-    StrategyUpdate,
-    StrategyResponse,
-    BacktestParams,
-    BacktestResponse,
-    BacktestResult
-)
+from ..models.strategy import Strategy, UserStrategy
+from ..models.backtest import Backtest, BacktestParams
 from ..crud.strategy import (
     get_strategies_by_user_id,
     get_strategy_by_id,
@@ -32,43 +25,8 @@ from ..utils.mongo_helpers import PyObjectId
 
 router = APIRouter()
 
-def strategy_to_response(strategy: Strategy) -> StrategyResponse:
-    """Convert Strategy model to response model"""
-    return StrategyResponse(
-        id=str(strategy.id),
-        user_id=str(strategy.user_id),
-        name=strategy.name,
-        description=strategy.description,
-        config=strategy.config,
-        is_active=strategy.is_active,
-        is_paper=strategy.is_paper,
-        performance_stats=strategy.performance_stats,
-        created_at=strategy.created_at,
-        updated_at=strategy.updated_at
-    )
 
-def backtest_result_to_response(backtest_result: BacktestResult) -> BacktestResponse:
-    """Convert BacktestResult model to response model"""
-    return BacktestResponse(
-        id=str(backtest_result.id),
-        strategy_id=str(backtest_result.strategy_id),
-        total_return=backtest_result.total_return,
-        sharpe_ratio=backtest_result.sharpe_ratio,
-        max_drawdown=backtest_result.max_drawdown,
-        win_rate=backtest_result.win_rate,
-        total_trades=backtest_result.total_trades,
-        profit_factor=backtest_result.profit_factor,
-        initial_capital=backtest_result.initial_capital,
-        final_capital=backtest_result.final_capital,
-        start_date=backtest_result.start_date,
-        end_date=backtest_result.end_date,
-        timeframe=backtest_result.timeframe,
-        trades=backtest_result.trades,
-        equity_curve=backtest_result.equity_curve,
-        created_at=backtest_result.created_at
-    )
-
-@router.get("/user_strategies", response_model=List[StrategyResponse])
+@router.get("/user_strategies", response_model=List[Strategy])
 async def get_user_strategies(
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: Database = Depends(get_db)
@@ -86,10 +44,9 @@ async def get_user_strategies(
         for strategy in strategies:
             print(f"DEBUG: Strategy - ID: {strategy.id}, Name: {strategy.name}, User ID: {strategy.user_id}")
         
-        result = [strategy_to_response(strategy) for strategy in strategies]
-        print(f"DEBUG: Returning {len(result)} strategies to frontend")
+        print(f"DEBUG: Returning {len(strategies)} strategies to frontend")
         
-        return result
+        return strategies
     except Exception as e:
         print(f"DEBUG: Error fetching strategies: {str(e)}")
         raise HTTPException(
@@ -97,13 +54,13 @@ async def get_user_strategies(
             detail=f"Failed to fetch strategies: {str(e)}"
         )
 
-@router.get("/default", response_model=List[StrategyCreate])
+@router.get("/default", response_model=List[UserStrategy])
 async def get_default_strategies_endpoint(db: Database = Depends(get_db)):
     """Get default strategies from database collection"""
     try:
         strategy_docs = await get_default_strategies_from_db(db)
         
-        # Convert raw documents to StrategyCreate format for response
+        # Convert raw documents to UserStrategy format for response
         strategy_creates = []
         for doc in strategy_docs:
             # Create a proper config with all required fields
@@ -124,7 +81,7 @@ async def get_default_strategies_endpoint(db: Database = Depends(get_db)):
             else:
                 config_data = raw_config
             
-            strategy_creates.append(StrategyCreate(
+            strategy_creates.append(UserStrategy(
                 name=doc["name"],
                 description=doc.get("description", ""),
                 config=config_data
@@ -161,7 +118,7 @@ async def get_default_strategies_with_ids(db: Database = Depends(get_db)):
             detail=f"Failed to load default strategies with IDs: {str(e)}"
         )
 
-@router.get("/{strategy_id}", response_model=StrategyResponse)
+@router.get("/{strategy_id}", response_model=Strategy)
 async def get_strategy(
     strategy_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
@@ -183,28 +140,28 @@ async def get_strategy(
             detail="Strategy not found"
         )
     
-    return strategy_to_response(strategy)
+    return strategy
 
-@router.post("/", response_model=StrategyResponse)
+@router.post("/", response_model=Strategy)
 async def create_new_strategy(
-    strategy_data: StrategyCreate,
+    strategy_data: UserStrategy,
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: Database = Depends(get_db)
 ):
     """Create a new strategy"""
     try:
         strategy = await create_strategy(db, strategy_data, current_user.id)
-        return strategy_to_response(strategy)
+        return strategy
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create strategy: {str(e)}"
-        )
+        ) 
 
-@router.put("/{strategy_id}", response_model=StrategyResponse)
+@router.put("/{strategy_id}", response_model=Strategy)
 async def update_existing_strategy(
     strategy_id: str,
-    strategy_update: StrategyUpdate,
+    strategy_update: UserStrategy,
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: Database = Depends(get_db)
 ):
@@ -224,7 +181,7 @@ async def update_existing_strategy(
             detail="Strategy not found or no changes made"
         )
     
-    return strategy_to_response(updated_strategy)
+    return updated_strategy
 
 @router.delete("/{strategy_id}")
 async def delete_existing_strategy(
@@ -262,7 +219,7 @@ async def delete_existing_strategy(
     
     return {"message": "Strategy deleted successfully"}
 
-@router.post("/{strategy_id}/toggle", response_model=StrategyResponse)
+@router.post("/{strategy_id}/toggle", response_model=Strategy)
 async def toggle_strategy_trading(
     strategy_id: str,
     toggle_data: dict,
@@ -287,7 +244,7 @@ async def toggle_strategy_trading(
             detail="Strategy not found"
         )
     
-    return strategy_to_response(updated_strategy)
+    return updated_strategy
 
 # Background task for running backtests
 async def run_backtest_task(
@@ -348,7 +305,7 @@ async def start_backtest(
         "status": "running"
     }
 
-@router.get("/{strategy_id}/backtest", response_model=List[BacktestResponse])
+@router.get("/{strategy_id}/backtest", response_model=List[Backtest])
 async def get_strategy_backtest_results(
     strategy_id: str,
     current_user: UserInDB = Depends(get_current_user_from_token),
@@ -372,9 +329,9 @@ async def get_strategy_backtest_results(
         )
     
     backtest_results = await get_backtest_results_by_strategy(db, strategy_obj_id)
-    return [backtest_result_to_response(result) for result in backtest_results]
+    return backtest_results
 
-@router.get("/{strategy_id}/backtest/{backtest_id}", response_model=BacktestResponse)
+@router.get("/{strategy_id}/backtest/{backtest_id}", response_model=Backtest)
 async def get_specific_backtest_result(
     strategy_id: str,
     backtest_id: str,
@@ -406,4 +363,4 @@ async def get_specific_backtest_result(
             detail="Backtest result not found"
         )
     
-    return backtest_result_to_response(backtest_result)
+    return backtest_result

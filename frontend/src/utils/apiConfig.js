@@ -29,8 +29,8 @@ const getWebSocketUrl = () => {
     return backendServicesUrl.replace(/^http/, 'ws');
   }
   
-  // Default to localhost:8001 for development
-  return 'ws://localhost:8001';
+  // Default to localhost:8000 for development - backend main port, not backend_services
+  return 'ws://localhost:8000';
 };
 
 const createApiConfig = () => {

@@ -161,7 +161,7 @@ const StrategyLibraryInterface = () => {
   // Combine default and user strategies
   const allStrategies = useMemo(() => {
     const userStrategiesFormatted = userStrategies.map(strategy => ({
-      id: strategy.id,
+      id: strategy.id || strategy._id,
       name: strategy.name,
       description: strategy.description || 'No description provided',
       type: 'user',

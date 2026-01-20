@@ -8,7 +8,7 @@ from pathlib import Path
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pymongo import MongoClient
@@ -17,6 +17,7 @@ from pymongo.database import Database
 from .routes import auth, user, user_config, strategy, backtest_routes, trading_routes
 from .database.client import db_client
 from .utils.redis_client import redis_client
+from .utils.websocket_manager import websocket_manager
 from .services.default_strategies import initialize_default_strategies
 
 # Global database client
@@ -104,6 +105,10 @@ app.include_router(user_config.router, prefix="/api/user-config", tags=["user-co
 app.include_router(strategy.router, prefix="/api/strategy", tags=["strategies"])
 app.include_router(backtest_routes.router, prefix="/api/backtest", tags=["backtests"])
 app.include_router(trading_routes.router, prefix="/api/trading", tags=["trading"])
+
+@app.websocket("/ws/task/{task_id}")
+async def websocket_endpoint(websocket: WebSocket, task_id: str):
+    await websocket_manager.connect(websocket, task_id)
 
 @app.get("/")
 async def root():

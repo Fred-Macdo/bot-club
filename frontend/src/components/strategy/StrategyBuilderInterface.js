@@ -78,10 +78,12 @@ const StrategyBuilderInterface = () => {
       max_position_size: 10000.0,
       atr_multiplier: 2.0
     },
-    // Add DCA configuration
+    // Updated DCA configuration state
     dollar_cost_averaging: {
       enabled: false,
-      max_positions: 3
+      interval: "1d",
+      max_attempts: 3,
+      amount_per_attempt: 100.0
     },
     indicators: [
       {
@@ -133,7 +135,8 @@ const StrategyBuilderInterface = () => {
     { name: 'MFI', label: 'Money Flow Index', defaultParams: { period: 14 } },
     { name: 'ADX', label: 'Average Directional Index', defaultParams: { period: 14 } },
     { name: 'OBV', label: 'On Balance Volume', defaultParams: { period: 14 } }
-  ];  const comparisons = ['crosses_above', 'crosses_below', 'greater_than', 'less_than', 'equals', 'between'];
+  ];  
+  const comparisons = ['crosses_above', 'crosses_below', 'greater_than', 'less_than', 'equals', 'between'];
   const timeframes = ['1Min ', '2Min', '5Min', '10Min', '15Min', '30Min', '1Hour', '4Hour', '1Day', '2Day', '1Week', '2Week', '1Month', '3Month'];
     // Popular symbols for autocomplete suggestions
   const popularSymbols = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'CRM', 'BTC-USD', 'ETH-USD', 'SPY', 'QQQ', 'VOO'];
@@ -456,11 +459,35 @@ ${strategyConfig.indicators.map(indicator =>
   // Handle saving strategy
   const handleSaveStrategy = async () => {
     try {
-      const result = await saveStrategy({
+      // Backend model StrategyCreate expects:
+      // name, description, config (StrategyConfig)
+      
+      // Prepare the config object matching StrategyConfig Pydantic model
+      const configPayload = {
+        ...strategyConfig,
+        // Map frontend 'dollar_cost_averaging' to backend 'dollar_cost_average'
+        dollar_cost_average: {
+          enabled: strategyConfig.dollar_cost_averaging.enabled,
+          interval: strategyConfig.dollar_cost_averaging.interval,
+          max_attempts: strategyConfig.dollar_cost_averaging.max_attempts,
+          amount_per_attempt: strategyConfig.dollar_cost_averaging.amount_per_attempt
+        }
+      };
+
+      // Remove the frontend-specific key to avoid confusion (though Pydantic often ignores extras)
+      delete configPayload.dollar_cost_averaging;
+
+      const payload = {
         name: strategyName,
         description: strategyDescription,
-        config: strategyConfig
-      }, user.id); // Swapped arguments
+        config: configPayload,
+        // Set defaults for other fields expected by StrategyCreate/Strategy logic
+        is_active: false,
+        is_paper: true
+      };
+
+      console.log("This is the payload", payload)
+      const result = await saveStrategy(payload, user.id);
 
       if (result.success) {
         setSaveSuccess(true);
@@ -471,7 +498,9 @@ ${strategyConfig.indicators.map(indicator =>
     } catch (error) {
       setSaveError('Error saving strategy: ' + error.message);
     }
-  };  // Update YAML when config changes
+  };
+
+  // Update YAML when config changes
   useEffect(() => {
     setYamlConfig(generateYamlConfig());
   }, [generateYamlConfig]);return (
@@ -1087,24 +1116,56 @@ ${strategyConfig.indicators.map(indicator =>
 
             {strategyConfig.dollar_cost_averaging.enabled && (
               <Grid container spacing={3}>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} md={4}>
                   <TextField
                     fullWidth
-                    label="Maximum Positions per Symbol"
-                    type="number"
-                    value={strategyConfig.dollar_cost_averaging.max_positions}
+                    label="Interval"
+                    value={strategyConfig.dollar_cost_averaging.interval}
                     onChange={(e) => setStrategyConfig({
                       ...strategyConfig,
                       dollar_cost_averaging: {
                         ...strategyConfig.dollar_cost_averaging,
-                        max_positions: parseInt(e.target.value)
+                        interval: e.target.value
+                      }
+                    })}
+                    helperText="e.g., 1d, 4h, 30m"
+                  />
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <TextField
+                    fullWidth
+                    label="Max Attempts"
+                    type="number"
+                    value={strategyConfig.dollar_cost_averaging.max_attempts}
+                    onChange={(e) => setStrategyConfig({
+                      ...strategyConfig,
+                      dollar_cost_averaging: {
+                        ...strategyConfig.dollar_cost_averaging,
+                        max_attempts: parseInt(e.target.value) || 1
                       }
                     })}
                     inputProps={{ min: 1, max: 10, step: 1 }}
-                    helperText="Maximum number of simultaneous positions per symbol"
+                    helperText="Max DCA entries per symbol"
                   />
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12} md={4}>
+                  <TextField
+                    fullWidth
+                    label="Amount per Attempt ($)"
+                    type="number"
+                    value={strategyConfig.dollar_cost_averaging.amount_per_attempt}
+                    onChange={(e) => setStrategyConfig({
+                      ...strategyConfig,
+                      dollar_cost_averaging: {
+                        ...strategyConfig.dollar_cost_averaging,
+                        amount_per_attempt: parseFloat(e.target.value) || 0
+                      }
+                    })}
+                    inputProps={{ min: 10, step: 10 }}
+                    helperText="Capital to invest per DCA entry"
+                  />
+                </Grid>
+                <Grid item xs={12}>
                   <Box sx={{ 
                     p: 2, 
                     bgcolor: 'info.light', 
@@ -1115,16 +1176,16 @@ ${strategyConfig.indicators.map(indicator =>
                       DCA Strategy Info:
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
-                      • When enabled, strategy can open multiple trades per symbol at different price levels
+                      • When enabled, strategy will scale into positions up to {strategyConfig.dollar_cost_averaging.max_attempts} times.
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
-                      • Each entry signal creates a new position (up to max limit)
+                      • Each entry will invest ${strategyConfig.dollar_cost_averaging.amount_per_attempt}.
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
-                      • Positions are closed individually based on exit conditions
+                      • The system waits {strategyConfig.dollar_cost_averaging.interval} between each attempt.
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block' }}>
-                      • Useful for scaling into positions during favorable conditions
+                      • Useful for building positions gradually and reducing impact of volatility
                     </Typography>
                   </Box>
                 </Grid>

@@ -179,7 +179,7 @@ const apiClient = new ApiClient();
 
 // 🔐 AUTHENTICATION API
 export const authApi = {
-  async login(username, password) {
+    async login(username, password) {
     const formData = new FormData();
     formData.append('username', username);
     formData.append('password', password);
@@ -188,6 +188,8 @@ export const authApi = {
       // Save token automatically on successful login
     if (response?.access_token) {
       apiClient.setToken(response.access_token);
+      // Dispatch login event
+      window.dispatchEvent(new CustomEvent('auth:login', { detail: 'User logged in' }));
     }
     
     return response;
@@ -356,9 +358,9 @@ export const tradingApi = {
     return apiClient.post('/api/trading/live', { strategy_id: strategyId });  
   },
 
-  async stopTrading(strategyId) {
-    console.log(`tradingApi.stopTrading() called for strategy ${strategyId}`);
-    return apiClient.post('/api/trading/stop', { strategy_id: strategyId });
+  async stopTrading(strategyId, taskId) {
+    console.log(`tradingApi.stopTrading() called for strategy ${strategyId}, task ${taskId}`);
+    return apiClient.post('/api/trading/stop', { strategy_id: strategyId, task_id: taskId });
   },
 
   async getActiveSessions(userId) {
@@ -438,12 +440,12 @@ export const deployStrategy = async (strategyId, mode, dataProvider) => {
   }
 };
 
-export const stopStrategy = async (strategyId, mode) => {
+export const stopStrategy = async (strategyId, taskId) => {
     try {
-      const result = await tradingApi.stopTrading(strategyId);
+      const result = await tradingApi.stopTrading(strategyId, taskId);
       return { success: true, data: result };
     } catch (error) {
-      console.error(`Error stopping ${mode} strategy:`, error);
+      console.error(`Error stopping strategy:`, error);
       return { success: false, error: error.message };
     }
   };

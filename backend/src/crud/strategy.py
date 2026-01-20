@@ -5,17 +5,11 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..models.strategy import (
     Strategy, 
-    StrategyCreate, 
-    StrategyUpdate, 
     StrategyConfig,
-    BacktestResult, 
-    BacktestParams,
-    DeployedStrategy,
     RiskManagement,
-    StatusEnum,
-    AccountTypeEnum,
-    RuntimeStrategy
+    UserStrategy
 )
+from ..models.backtest import Backtest
 from ..utils.mongo_helpers import PyObjectId
 from ..services.default_strategies import get_default_strategies_from_db as get_default_strategies_service
 from ..utils.redis_client import redis_client
@@ -26,8 +20,6 @@ import json
 STRATEGY_COLLECTION = "strategy"
 BACKTEST_COLLECTION = "backtest_result"
 DEFAULT_STRATEGIES_COLLECTION = "default_strategies"
-RUNTIME_STRATEGIES_COLLECTION = "runtime_strategies"
-DEPLOYED_STRATEGIES_COLLECTION = "deployed_strategies"
 
 def execute_find(collection, query, sort=None):
     """Helper to execute find synchronously in thread"""
@@ -157,80 +149,53 @@ async def get_strategy_by_id(db: AsyncIOMotorDatabase, strategy_id: PyObjectId, 
         return Strategy(**strategy_data)
     return None
 
-async def create_strategy(db: AsyncIOMotorDatabase, strategy_data: StrategyCreate, user_id: PyObjectId) -> Strategy:
+async def create_strategy(db: AsyncIOMotorDatabase, strategy_data: UserStrategy, user_id: PyObjectId) -> Strategy:
     """Create a new strategy"""
     strategy = Strategy(
         user_id=user_id,
         name=strategy_data.name,
         description=strategy_data.description,
-        config=strategy_data.config,
+        config=strategy_data.config.model_dump(),  # Convert config model to dict
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
     
-    strategy_dict = strategy.dict(by_alias=True)
+    strategy_dict = strategy.model_dump(by_alias=True)
     result = await run_db_operation(db[STRATEGY_COLLECTION].insert_one, strategy_dict)
 
-    # Store the strategy in the deployed_strategies collection
-    deployed_strategy = DeployedStrategy(
-        user_id=user_id,
-        strategy_id=result.inserted_id,
-        strategy_name=strategy_data.name,
-        created_at=datetime.utcnow(),
-        status=StatusEnum.INACTIVE,
-        account_type=AccountTypeEnum.PAPER
-    )
-    await run_db_operation(db[DEPLOYED_STRATEGIES_COLLECTION].insert_one, deployed_strategy.dict(by_alias=True))
-
-    # Store the strategy in the runtime_strategies collection
-    runtime_strategy = RuntimeStrategy(
-        user_id=user_id,
-        strategy_id=result.inserted_id,
-        strategy_name=strategy_data.name,
-        created_at=datetime.utcnow(),
-        current_capital=0,
-        current_positions=[],
-        performance_metrics={},
-        error_logs=[],
-        last_execution_time=None,
-        last_update_time=None
-    )
-    await run_db_operation(db[RUNTIME_STRATEGIES_COLLECTION].insert_one, runtime_strategy.dict(by_alias=True))
-    
     # Return the created strategy with the new ID
-    strategy.id = result.inserted_id
+    strategy.strategy_id = str(result.inserted_id)
     return strategy
 
 async def update_strategy(
     db: AsyncIOMotorDatabase, 
     strategy_id: PyObjectId, 
-    strategy_update: StrategyUpdate, 
+    update_data: UserStrategy, 
     user_id: PyObjectId
 ) -> Optional[Strategy]:
     """Update an existing strategy"""
-    # Build update data
-    update_data = {}
-    if strategy_update.name is not None:
-        update_data["name"] = strategy_update.name
-    if strategy_update.description is not None:
-        update_data["description"] = strategy_update.description
-    if strategy_update.config is not None:
-        update_data["config"] = strategy_update.config.dict()
-    if strategy_update.is_active is not None:
-        update_data["is_active"] = strategy_update.is_active
-    if strategy_update.is_paper is not None:
-        update_data["is_paper"] = strategy_update.is_paper
+    # Create update dictionary
+    update_dict = update_data.model_dump(exclude_unset=True, exclude={'id', 'user_id', 'created_at', 'updated_at'})
     
-    update_data["updated_at"] = datetime.utcnow()
+    if not update_dict:
+        return await get_strategy_by_id(db, strategy_id, user_id)
+    
+    # Handle config conversion to dict if present
+    if "config" in update_dict and update_dict["config"]:
+        # If it's a model, dump it. If it's already a dict, leave it.
+        pass
+
+    update_dict["updated_at"] = datetime.utcnow()
     
     result = await run_db_operation(
         db[STRATEGY_COLLECTION].update_one,
         {"_id": strategy_id, "user_id": user_id},
-        {"$set": update_data}
+        {"$set": update_dict}
     )
     
-    if result.modified_count:
+    if result.matched_count:
         return await get_strategy_by_id(db, strategy_id, user_id)
+        
     return None
 
 async def delete_strategy(db: AsyncIOMotorDatabase, strategy_id: PyObjectId, user_id: PyObjectId) -> bool:
@@ -265,8 +230,8 @@ async def toggle_strategy_status(
 async def save_backtest_result(
     db: AsyncIOMotorDatabase, 
     strategy_id: PyObjectId, 
-    backtest_result: BacktestResult
-) -> BacktestResult:
+    backtest_result: Backtest
+) -> Backtest:
     """Save backtest results"""
     backtest_result.strategy_id = strategy_id
     backtest_result.created_at = datetime.utcnow()
@@ -280,24 +245,24 @@ async def save_backtest_result(
 async def get_backtest_results_by_strategy(
     db: AsyncIOMotorDatabase, 
     strategy_id: PyObjectId
-) -> List[BacktestResult]:
+) -> List[Backtest]:
     """Get all backtest results for a strategy"""
     results = []
     # Use execute_find helper with sort
     raw_results = await run_db_operation(execute_find, db[BACKTEST_COLLECTION], {"strategy_id": strategy_id}, sort=[("created_at", -1)])
     
     for result_data in raw_results:
-        results.append(BacktestResult(**result_data))
+        results.append(Backtest(**result_data))
     return results
 
 async def get_backtest_result_by_id(
     db: AsyncIOMotorDatabase, 
     backtest_id: PyObjectId
-) -> Optional[BacktestResult]:
+) -> Optional[Backtest]:
     """Get a specific backtest result by ID"""
     result_data = await run_db_operation(db[BACKTEST_COLLECTION].find_one, {"_id": backtest_id})
     if result_data:
-        return BacktestResult(**result_data)
+        return Backtest(**result_data)
     return None
 
 async def delete_backtest_results_by_strategy(

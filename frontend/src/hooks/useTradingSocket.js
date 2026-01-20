@@ -30,6 +30,7 @@ const useTradingSocket = (strategyId) => {
 
     webSocket.current.onopen = () => {
       console.log(`WebSocket connected for strategy ${strategyId}`);
+      console.log(`Subscribed to websocket at ${wsUrl}`);
       setStatus('connected');
       setError(null);
     };

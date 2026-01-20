@@ -1,7 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import Callable, Any, Coroutine
+from typing import Callable, Any
 
 # A thread pool to run synchronous database operations without blocking the event loop
 executor = ThreadPoolExecutor(max_workers=20)
@@ -26,3 +26,4 @@ async def run_db_operation(sync_function: Callable[..., Any], *args: Any, **kwar
     
     # run_in_executor returns a future, which we can await
     return await loop.run_in_executor(executor, func_with_args)
+

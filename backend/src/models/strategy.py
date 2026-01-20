@@ -1,31 +1,47 @@
 from datetime import datetime
-from typing import List, Optional, Any, Dict, Literal
+from typing import List, Optional, Any, Dict, Literal, Union
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict, BeforeValidator
+from typing_extensions import Annotated
 from bson import ObjectId
-from ..utils.mongo_helpers import PyObjectId
 
-class Indicator(BaseModel):
-    """Technical indicator configuration"""
-    name: str = Field(..., description="Indicator name (SMA, EMA, RSI, etc.)")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Indicator parameters")
-    
-    @field_validator('name')
-    @classmethod
-    def validate_name_lowercase(cls, v):
-        """Convert indicator name to lowercase"""
-        return v.lower() if isinstance(v, str) else v
+# Helper for ObjectId handling
+PyObjectId = Annotated[str, BeforeValidator(str)]
+
+class AccountTypeEnum(str, Enum):
+    PAPER = "paper"
+    LIVE = "live"
+
+class StatusEnum(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    PAUSED = "paused"
 
 class Condition(BaseModel):
     """Trading condition for entry/exit"""
     indicator: str = Field(..., description="Indicator or price field to compare")
     comparison: str = Field(..., description="Comparison operator (above, below, crosses_above, etc.)")
-    value: Any = Field(..., description="Value to compare against (number or indicator name)")
+    value: Union[str, float, int] = Field(..., description="Value to compare against (number or indicator name)")
     
     @field_validator('indicator', 'comparison')
     @classmethod
     def validate_strings_lowercase(cls, v):
         """Convert indicator and comparison to lowercase"""
+        return v.lower() if isinstance(v, str) else v
+
+class DollarCostAverage(BaseModel):
+    """
+    Configuration for Dollar Cost Averaging
+    """
+    enabled: bool = Field(default=False, description="Whether DCA is enabled")
+    interval: str = Field(default="1d", description="DCA interval (1d, 1h, etc.)")
+    max_attempts: int = Field(default=3, description="Maximum number of DCA attempts")
+    amount_per_attempt: float = Field(default=100.0, description="Amount to invest per DCA attempt")
+    
+    @field_validator('interval')
+    @classmethod
+    def validate_interval_lowercase(cls, v):
+        """Convert interval to lowercase"""
         return v.lower() if isinstance(v, str) else v
 
 class RiskManagement(BaseModel):
@@ -49,11 +65,14 @@ class StrategyConfig(BaseModel):
     timeframe: str = Field(..., description="Chart timeframe (1d, 1h, 15m, etc.)")
     start_date: str = Field(..., description="Strategy start date")
     end_date: str = Field(..., description="Strategy end date")
-    entry_conditions: List[Condition] = Field(default_factory=list, description="Entry conditions")
-    exit_conditions: List[Condition] = Field(default_factory=list, description="Exit conditions")
+    entry_conditions: List[Dict[str, Any]] = Field(default_factory=list, description="Entry conditions")
+    exit_conditions: List[Dict[str, Any]] = Field(default_factory=list, description="Exit conditions")
     risk_management: RiskManagement = Field(default_factory=RiskManagement, description="Risk management settings")
-    indicators: List[Indicator] = Field(default_factory=list, description="Required technical indicators")
+    indicators: List[Dict[str, Any]] = Field(default_factory=list, description="Required technical indicators")
     
+    # FIX: Added this field so Pydantic doesn't strip it out
+    dollar_cost_average: Optional[DollarCostAverage] = None
+
     @field_validator('symbols')
     @classmethod
     def validate_symbols_uppercase(cls, v):
@@ -67,29 +86,6 @@ class StrategyConfig(BaseModel):
     def validate_timeframe_uppercase(cls, v):
         """Convert timeframe to uppercase"""
         return v.upper() if isinstance(v, str) else v
-
-class BacktestResult(BaseModel):
-    """Backtest results"""
-    strategy_id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    total_return: float = Field(..., description="Total return percentage")
-    sharpe_ratio: float = Field(..., description="Sharpe ratio")
-    max_drawdown: float = Field(..., description="Maximum drawdown percentage")
-    win_rate: float = Field(..., description="Win rate percentage")
-    total_trades: int = Field(..., description="Total number of trades")
-    profit_factor: float = Field(..., description="Profit factor")
-    initial_capital: float = Field(..., description="Initial capital amount")
-    final_capital: float = Field(..., description="Final capital amount")
-    start_date: str = Field(..., description="Backtest start date")
-    end_date: str = Field(..., description="Backtest end date")
-    timeframe: str = Field(..., description="Backtest timeframe")
-    trades: List[Dict[str, Any]] = Field(default_factory=list, description="Individual trade details")
-    equity_curve: List[Dict[str, Any]] = Field(default_factory=list, description="Equity curve data")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-    class Config:
-        validate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
 
 class Strategy(BaseModel):
     """Main strategy model"""
@@ -115,97 +111,22 @@ class Strategy(BaseModel):
         arbitrary_types_allowed = True
         json_encoders = {ObjectId: str}
 
-class StrategyCreate(BaseModel):
-    """Model for creating a new strategy"""
-    name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    config: StrategyConfig
+class UserStrategy(BaseModel):
+    """
+    Model for creating/updating a strategy
+    """
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    name: str
+    description: Optional[str] = None
+    config: StrategyConfig # Uses the updated config model with DCA support
+    is_active: bool = False
+    is_paper: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    user_id: Optional[PyObjectId] = None
 
-class StrategyUpdate(BaseModel):
-    """Model for updating a strategy"""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    config: Optional[StrategyConfig] = None
-    is_active: Optional[bool] = None
-    is_paper: Optional[bool] = None
-
-class StrategyResponse(BaseModel):
-    """Response model for strategy data"""
-    id: str = Field(..., description="Strategy ID")
-    user_id: str = Field(..., description="User ID")
-    name: str = Field(..., description="Strategy name")
-    description: Optional[str] = Field(None, description="Strategy description")
-    config: StrategyConfig = Field(..., description="Strategy configuration")
-    is_active: bool = Field(..., description="Whether strategy is active")
-    is_paper: bool = Field(..., description="Whether this is paper trading")
-    performance_stats: Optional[Dict[str, Any]] = Field(None, description="Performance statistics")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-
-    class Config:
-        validate_by_name = True
-
-class BacktestParams(BaseModel):
-    """Parameters for running a backtest"""
-    start_date: str = Field(..., description="Backtest start date (YYYY-MM-DD)")
-    end_date: str = Field(..., description="Backtest end date (YYYY-MM-DD)")
-    initial_capital: float = Field(default=100000.0, description="Initial capital for backtest")
-    timeframe: str = Field(default="1d", description="Data timeframe")
-
-class BacktestResponse(BaseModel):
-    """Response model for backtest results"""
-    id: str = Field(..., description="Backtest result ID")
-    strategy_id: str = Field(..., description="Strategy ID")
-    total_return: float = Field(..., description="Total return percentage")
-    sharpe_ratio: float = Field(..., description="Sharpe ratio")
-    max_drawdown: float = Field(..., description="Maximum drawdown percentage")
-    win_rate: float = Field(..., description="Win rate percentage")
-    total_trades: int = Field(..., description="Total number of trades")
-    profit_factor: float = Field(..., description="Profit factor")
-    initial_capital: float = Field(..., description="Initial capital")
-    final_capital: float = Field(..., description="Final capital")
-    start_date: str = Field(..., description="Backtest start date")
-    end_date: str = Field(..., description="Backtest end date")
-    timeframe: str = Field(..., description="Backtest timeframe")
-    trades: List[Dict[str, Any]] = Field(..., description="Trade details")
-    equity_curve: List[Dict[str, Any]] = Field(..., description="Equity curve")
-    created_at: datetime = Field(..., description="Creation timestamp")
-
-    class Config:
-        validate_by_name = True
-
-class RuntimeStrategy(BaseModel):
-    """Runtime strategy model for deployed strategies"""
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    user_id: PyObjectId = Field(..., description="User who owns this strategy")
-    strategy_id: PyObjectId = Field(..., description="Strategy that was deployed")
-    strategy_name: str = Field(..., description="Name of the strategy")
-    current_capital: float = Field(..., description="Current capital")
-    current_positions: List[Dict[str, Any]] = Field(..., description="Current positions")
-    performance_metrics: Dict[str, Any] = Field(..., description="Performance metrics")
-    error_logs: List[Dict[str, Any]] = Field(..., description="Error logs")
-    last_execution_time: datetime = Field(..., description="Last execution time")
-    last_update_time: datetime = Field(..., description="Last update time")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    
-#########################################################
-################### Deployed Strategy ###################
-#########################################################
-
-class StatusEnum(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-
-class AccountTypeEnum(str, Enum):
-    LIVE = "live"
-    PAPER = "paper"
-
-class DeployedStrategy(BaseModel):
-    """Deployed strategy model for deployed strategies"""
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    user_id: PyObjectId = Field(..., description="User who owns this strategy")
-    strategy_id: PyObjectId = Field(..., description="Strategy that was deployed")
-    strategy_name: str = Field(..., description="Name of the strategy")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    status: StatusEnum = Field(default=StatusEnum.INACTIVE, description="Status of the strategy")
-    account_type: AccountTypeEnum = Field(default=AccountTypeEnum.PAPER, description="Account type")
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={datetime: lambda dt: dt.isoformat()}
+    )

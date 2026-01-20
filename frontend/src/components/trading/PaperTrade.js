@@ -108,6 +108,7 @@ const PaperTradingPage = () => {
     dataProvider,
     mode, // Added mode
     deploymentTime,
+    activeTaskId, // Get activeTaskId from context
     deployStrategy: deployStrategyContext,
     stopStrategy: stopStrategyContext,
     setDataProvider,
@@ -155,7 +156,7 @@ const PaperTradingPage = () => {
     
     // Format user strategies
     const userStrategiesFormatted = strategies.map(strategy => ({
-      id: strategy.id,
+      id: strategy.id || strategy._id,
       name: strategy.name,
       description: strategy.description || 'No description provided',
       type: 'user',
@@ -214,10 +215,15 @@ const PaperTradingPage = () => {
       return;
     }
 
+    if (!activeTaskId) {
+        alert('No active task ID found for the running strategy.');
+        return;
+    }
+
     setIsLoading(true);
 
     try {
-      const result = await stopStrategy(selectedStrategy.id);
+      const result = await stopStrategy(selectedStrategy.id, activeTaskId);
 
       if (result.success) {
         // Update context (which persists to localStorage)
@@ -387,40 +393,49 @@ const PaperTradingPage = () => {
     { field: 'symbol', headerName: 'Symbol', width: 130 },
     { field: 'quantity', headerName: 'Quantity', width: 130, type: 'number' },
     { 
-      field: 'avgEntryPrice', 
-      headerName: 'Avg. Entry Price', 
+      field: 'entry_price', 
+      headerName: 'Entry Price', 
       width: 150, 
       type: 'number',
-      valueFormatter: (value) => value ? `$${Number(value).toFixed(4)}` : 'N/A'
-    },
-    { 
-      field: 'marketPrice', 
-      headerName: 'Market Price', 
-      width: 150, 
-      type: 'number',
-      valueFormatter: (value) => value ? `$${Number(value).toFixed(4)}` : 'N/A'
-    },
-    { 
-      field: 'marketValue', 
-      headerName: 'Market Value', 
-      width: 150, 
-      type: 'number',
-      valueFormatter: (value) => value ? `$${Number(value).toFixed(2)}` : 'N/A'
-    },
-    { 
-      field: 'unrealizedPnl', 
-      headerName: 'Unrealized P&L', 
-      width: 160, 
-      type: 'number',
-      renderCell: (params) => {
-        const pnl = Number(params.value) || 0;
-        const color = pnl >= 0 ? theme.palette.success.main : theme.palette.error.main;
-        return (
-          <Typography variant="body2" sx={{ color: color, fontWeight: 'bold' }}>
-            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-          </Typography>
-        );
+      valueFormatter: (params) => {
+        // Handle both object and value for compatibility
+        const val = params?.value !== undefined ? params.value : params;
+        return val ? `$${Number(val).toFixed(4)}` : 'N/A';
       }
+    },
+    { 
+      field: 'cost_basis', 
+      headerName: 'Cost Basis', 
+      width: 150, 
+      type: 'number',
+      valueFormatter: (params) => {
+        const val = params?.value !== undefined ? params.value : params;
+        return val ? `$${Number(val).toFixed(2)}` : 'N/A';
+      }
+    },
+    { 
+      field: 'entry_time', 
+      headerName: 'Entry Time', 
+      width: 180, 
+      valueFormatter: (params) => {
+        const val = params?.value !== undefined ? params.value : params;
+        if (!val) return 'N/A';
+        try {
+          return new Date(val).toLocaleString();
+        } catch {
+          return 'N/A';
+        }
+      }
+    },
+    { 
+      field: 'lot_id', 
+      headerName: 'Lot ID', 
+      width: 120,
+      renderCell: (params) => (
+        <Typography variant="caption" title={params.value}>
+            {params.value ? `${params.value.substring(0, 8)}...` : ''}
+        </Typography>
+      )
     },
   ];
 

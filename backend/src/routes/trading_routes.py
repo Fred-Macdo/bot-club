@@ -7,7 +7,8 @@ from ..dependencies import get_current_user_from_token
 from ..models.user import User
 from ..models.strategy import Strategy, AccountTypeEnum, StatusEnum
 import logging
-from ..config import BACKEND_SERVICES_URL
+from ..tasks.trading_tasks import run_live_strategy, stop_live_strategy
+from ..celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -30,28 +31,17 @@ async def start_trading(
     """
     Starts live or paper trading for a given strategy.
     """
-    try:
-        payload = {
-            "strategy_id": trading_request.strategy_id,
-            "user_id": str(current_user.id),
-            "mode": trading_request.mode,
-            "data_provider": trading_request.data_provider
-        }
-        logger.info(f"DEBUG TRADING: Trading request payload: {payload}")
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_SERVICES_URL}/trading/run", json=payload, timeout=30)
-            response.raise_for_status()  # Raise an exception for bad status codes
-            return response.json()
-            
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to communicate with trading service: {e}"
-        )
+    logger.info(f"Received trading start request: {trading_request}")
+    logger.info(f"Current user: {current_user.id} - {current_user.email}")
+    # run celery tasks
+    task_result = run_live_strategy.delay(trading_request=trading_request.model_dump(mode='json'), 
+                                          current_user=current_user.model_dump(mode='json'))
+    return {"task_id": task_result.id}
+
 
 class StopTradingRequest(BaseModel):
     strategy_id: str
+    task_id: str
 
 @router.post("/stop")
 async def stop_trading(
@@ -61,18 +51,9 @@ async def stop_trading(
     """
     Stops a running live or paper trading strategy.
     """
-    try:
-        payload = {
-            "strategy_id": trading_request.strategy_id,
-            "user_id": str(current_user.id)
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_SERVICES_URL}/trading/stop", json=payload, timeout=30)
-            response.raise_for_status()
-            return response.json()
-            
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to communicate with trading service: {e}"
-        ) 
+    logger.info(f"Received trading stop request for task: {trading_request.task_id}")
+    
+    # Call the stop task
+    stop_live_strategy.delay(task_id=trading_request.task_id)
+    
+    return {"status": "stop_requested", "task_id": trading_request.task_id} 

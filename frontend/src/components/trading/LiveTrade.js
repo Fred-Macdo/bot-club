@@ -154,7 +154,7 @@ const LiveTradingPage = () => {
     
     // Format user strategies
     const userStrategiesFormatted = strategies.map(strategy => ({
-      id: strategy.id,
+      id: strategy.id || strategy._id,
       name: strategy.name,
       description: strategy.description || 'No description provided',
       type: 'user',

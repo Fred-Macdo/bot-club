@@ -61,7 +61,13 @@ export const StrategyProvider = ({ children }) => {
       const data = await response.json();
       console.log('Fetched user strategies:', data);
       
-      setStrategies(Array.isArray(data) ? data : []); // Ensure strategies is always an array
+      // Ensure strategies is always an array and normalize ID
+      const normalizedStrategies = (Array.isArray(data) ? data : []).map(strategy => ({
+        ...strategy,
+        id: strategy.id || strategy._id
+      }));
+
+      setStrategies(normalizedStrategies);
       setLastRefresh(new Date());
     } catch (err) {
       console.error('Error fetching strategies:', err);

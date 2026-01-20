@@ -50,26 +50,36 @@ export const DeployedStrategyProvider = ({ children }) => {
   
   const webSocket = useRef(null);
 
-  // Check for active sessions on mount/refresh
-  // This runs even if we hydrated from localStorage, to verify the session is still active
+  // Use a ref to track isDeployed state for access inside async callbacks
+  const isDeployedRef = useRef(isDeployed);
   useEffect(() => {
-    const checkActiveSessions = async () => {
+    isDeployedRef.current = isDeployed;
+  }, [isDeployed]);
+
+  // Listener for re-login events to trigger reconnection
+  useEffect(() => {
+    const handleLogin = () => {
+      console.log("DeployedStrategyContext: Auth login detected, re-checking sessions...");
+      // Re-run the active session check
+      checkActiveSessions();
+    };
+
+    window.addEventListener('auth:login', handleLogin);
+    return () => window.removeEventListener('auth:login', handleLogin);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Helper to check sessions (moved out of useEffect to be reusable)
+  const checkActiveSessions = async () => {
       if (!authApi.isAuthenticated()) {
-        console.log("DeployedStrategyContext: User not authenticated, skipping active session check.");
-        // If we hydrated from localStorage but not authenticated, clear state
+        console.log("DeployedStrategyContext: User not authenticated, checking if we should preserve state.");
         if (isDeployed) {
-          console.log("DeployedStrategyContext: Clearing stale deployment state (not authenticated).");
-          setIsDeployed(false);
-          setActiveTaskId(null);
-          setDeployedStrategy(null);
-          localStorage.removeItem('deployedStrategy');
+           console.log("DeployedStrategyContext: Preserving deployment state despite auth logout. Will reconnect on login.");
         }
         return;
       }
       
       try {
         const userProfile = await userApi.getProfile();
-        // Handle various ID formats (id vs _id)
         const userId = userProfile.id || userProfile._id || userProfile.user_id; 
         
         console.log(`DeployedStrategyContext: Checking active sessions for user: ${userId}`);
@@ -77,15 +87,10 @@ export const DeployedStrategyProvider = ({ children }) => {
         console.log('DeployedStrategyContext: Active sessions response:', response);
 
         if (response.active_sessions && response.active_sessions.length > 0) {
-           // Found active session!
-           // We currently handle only one active strategy in the context
            const session = response.active_sessions[0];
            console.log("DeployedStrategyContext: Found active session, reconnecting:", session);
            
-           // If we already have state from localStorage, just update the task_id
-           // to ensure we have the latest from the backend
            if (isDeployed && activeTaskId) {
-             // Verify task_id matches - if not, update it
              if (session.task_id && session.task_id !== activeTaskId) {
                console.log(`DeployedStrategyContext: Updating task_id from ${activeTaskId} to ${session.task_id}`);
                setActiveTaskId(session.task_id);
@@ -94,18 +99,14 @@ export const DeployedStrategyProvider = ({ children }) => {
              }
            } else {
              // No localStorage state, or missing task_id - do full setup
-             // Fetch full strategy details
              let strategy;
              try {
                strategy = await strategyApi.getStrategy(session.strategy_id);
-               
-               // Ensure id is present
                if (strategy && !strategy.id && strategy._id) {
                  strategy.id = strategy._id;
                }
              } catch (e) {
                console.error("DeployedStrategyContext: Failed to fetch strategy details for active session", e);
-               // Fallback: create a minimal strategy object so we can still reconnect
                strategy = { 
                  id: session.strategy_id, 
                  name: session.strategy_name || "Unknown Strategy",
@@ -113,61 +114,30 @@ export const DeployedStrategyProvider = ({ children }) => {
                };
              }
              
+             // Hydrate state from backend session
+             const provider = session.config?.data_provider || 'alpaca';
+             const mode = session.config?.mode || 'paper';
+             
+             // Use public setDeploymentState logic manually here to avoid circular dep or issues
+             // setDeploymentState cannot be called during render, but we are in async callback here
              setDeployedStrategy(strategy);
              setIsDeployed(true);
              setActiveTaskId(session.task_id); // Set task ID for WS connection
-             setMode(session.mode || 'paper');
-             setDataProvider(session.data_provider || 'alpaca');
+             setMode(mode);
+             setDataProvider(provider);
              // Timestamp from session might be ISO string
              setDeploymentTime(session.timestamp ? new Date(session.timestamp).getTime() : Date.now());
-           }
-
-           // Load existing session data (trades, positions, metrics)
-           try {
-             const sessionDetails = await tradingApi.getSessionDetails(session.strategy_id, userId);
-             console.log("DeployedStrategyContext: Loaded session details:", sessionDetails);
              
-             if (sessionDetails) {
-                // Populate state from session details
-                // Session details matches Portfolio model structure: positions, trades, etc.
-                
-                // Trades history
-                if (sessionDetails.trades) {
-                    setCompletedTrades(sessionDetails.trades);
-                    // Also populate trades log if desired, or keep separate?
-                    // Typically 'trades' in context might be for recent events or all.
-                    // Let's set it to sessionDetails.trades for now as a base.
-                    setTrades(sessionDetails.trades); 
-                }
-                
-                // Positions
-                if (sessionDetails.positions) {
-                    // Flatten positions dict to list if necessary, or check structure
-                    // Portfolio model: positions: Dict[str, List[Position]]
-                    // Frontend likely expects array of positions
-                    let flatPositions = [];
-                    if (typeof sessionDetails.positions === 'object' && !Array.isArray(sessionDetails.positions)) {
-                        Object.values(sessionDetails.positions).forEach(lots => {
-                            if (Array.isArray(lots)) {
-                                flatPositions = [...flatPositions, ...lots];
-                            }
-                        });
-                    } else if (Array.isArray(sessionDetails.positions)) {
-                        flatPositions = sessionDetails.positions;
-                    }
-                    setPositions(flatPositions);
-                }
-             }
-           } catch (detailsErr) {
-             console.error("DeployedStrategyContext: Error loading session details:", detailsErr);
+             // Optionally load initial positions/trades if available in response
+             // ...
            }
 
         } else {
             console.log("DeployedStrategyContext: No active sessions found on backend.");
-            // If we had state from localStorage but backend says no active session,
-            // the strategy must have stopped - clear the state
+            // If backend says no session, but we thought we were deployed, then we should clear.
+            // This handles the case where the task died while we were logged out.
             if (isDeployed) {
-              console.log("DeployedStrategyContext: Clearing stale deployment state.");
+              console.log("DeployedStrategyContext: Clearing stale deployment state - backend has no session.");
               setIsDeployed(false);
               setActiveTaskId(null);
               setDeployedStrategy(null);
@@ -178,9 +148,12 @@ export const DeployedStrategyProvider = ({ children }) => {
         console.error("DeployedStrategyContext: Error checking active sessions:", err);
       }
     };
-    
+
+  // Initial check on mount
+  useEffect(() => {
     checkActiveSessions();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // --- WebSocket Logic ---
   useEffect(() => {
@@ -193,7 +166,7 @@ export const DeployedStrategyProvider = ({ children }) => {
     
     if (!isDeployed || (!activeTaskId && !deployedStrategy?.id)) {
       if (webSocket.current) {
-        webSocket.current.close();
+        webSocket.current.close(1000, "Component unmounting or stopped");
         webSocket.current = null;
       }
       return;
@@ -224,7 +197,7 @@ export const DeployedStrategyProvider = ({ children }) => {
     
     // Close existing if different
     if (webSocket.current) {
-        webSocket.current.close();
+        webSocket.current.close(1000, "Switching connection");
     }
     
     let reconnectTimeout = null;
@@ -232,6 +205,7 @@ export const DeployedStrategyProvider = ({ children }) => {
     const connectSocket = () => {
         console.log(`Connecting socket for ID: ${connectionId}`);
         const ws = new WebSocket(wsUrl);
+        console.log("DeployedStrategyContext: WebSocket URL:", wsUrl);
         webSocket.current = ws;
 
         ws.onopen = () => {
@@ -254,6 +228,15 @@ export const DeployedStrategyProvider = ({ children }) => {
 
             if (message.type === 'status') {
               setSocketStatus(message.data.status);
+              
+              // Automatically stop deployment state if backend signals stop
+              if (message.data.status === 'stopped' || message.data.status === 'failed') {
+                  console.log(`Received ${message.data.status} signal from backend. Stopping strategy session.`);
+                  setIsDeployed(false);
+                  isDeployedRef.current = false;
+                  setActiveTaskId(null);
+                  localStorage.removeItem('deployedStrategy');
+              }
             } else if (message.type === 'log') {
               setLogs((prev) => [message.data, ...prev].slice(0, 200));
             } else if (message.type === 'trade') {
@@ -262,6 +245,32 @@ export const DeployedStrategyProvider = ({ children }) => {
               setCompletedTrades((prev) => [message.data, ...prev]);
             } else if (message.type === 'position') {
               setPositions(message.data.positions || []);
+            } else if (message.type === 'portfolio_update') {
+              console.log("Received portfolio_update message:", message.data);
+               // Handle enriched portfolio update which contains lots
+               const portfolio = message.data;
+               let allLots = [];
+               
+               if (portfolio.lots) {
+                   // Flatten the dictionary of lists: { "SYM": [lot1], ... } -> [lot1, ...]
+                   Object.values(portfolio.lots).forEach(lotList => {
+                       if (Array.isArray(lotList)) {
+                           allLots.push(...lotList);
+                       }
+                   });
+               }
+               
+               // Ensure each lot has an id for DataGrid
+               const gridRows = allLots.map(lot => ({
+                   ...lot,
+                   id: lot.lot_id // Map lot_id to id for DataGrid
+               }));
+               
+               setPositions(gridRows);
+               
+               if (portfolio.performance) {
+                   setMetrics(portfolio.performance);
+               }
             } else if (message.type === 'metrics') {
               setMetrics(message.data);
             }
@@ -281,10 +290,12 @@ export const DeployedStrategyProvider = ({ children }) => {
           setSocketStatus('disconnected');
           
           // Attempt reconnect if not closed cleanly and we are still deployed
-          if (isDeployed && event.code !== 1000) {
+          // Use Ref to check current state, bypassing closure staleness
+          if (isDeployedRef.current && event.code !== 1000) {
               console.log("Attempting to reconnect in 3s...");
               reconnectTimeout = setTimeout(() => {
-                  if (isDeployed) {
+                  // Double check state before reconnecting
+                  if (isDeployedRef.current) {
                       connectSocket();
                   }
               }, 3000);
@@ -361,9 +372,15 @@ export const DeployedStrategyProvider = ({ children }) => {
   };
 
   const stopStrategy = () => {
+    isDeployedRef.current = false; // Immediate update to prevent race conditions in WS callbacks
     setIsDeployed(false);
     setActiveTaskId(null);
-    // Socket will be closed by the useEffect cleanup
+    setSocketStatus('disconnected');
+    if (webSocket.current) {
+        // Explicitly close with normal closure code (1000) to prevent reconnect attempts
+        webSocket.current.close(1000, "User stopped strategy");
+        webSocket.current = null;
+    }
   };
 
   const clearDeployment = () => {
@@ -379,6 +396,7 @@ export const DeployedStrategyProvider = ({ children }) => {
     dataProvider,
     mode,
     deploymentTime,
+    activeTaskId, // Export activeTaskId
     deployStrategy,
     stopStrategy,
     clearDeployment,
