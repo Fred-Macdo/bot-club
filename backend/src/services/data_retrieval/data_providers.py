@@ -1,7 +1,7 @@
 # backend/src/services/data_providers.py
 from abc import ABC, abstractmethod
 import polars as pl
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Optional, Dict, Any, Tuple, Union, List
 import yfinance as yf
@@ -32,31 +32,7 @@ TIMEFRAME_MAPPINGS = {
     '3mo': {'yahoo': '3mo', 'alpaca': '3Month', 'polygon': ('month', 3)},
 }
 
-AVAILABLE_CRYPTO_ASSETS = ['AAVE',
-                            'AVAX',
-                            'BAT',
-                            'BCH',
-                            'BTC',
-                            'CRV',
-                            'DOGE',
-                            'DOT',
-                            'ETH',
-                            'GRT',
-                            'LINK',
-                            'LTC',
-                            'MKR',
-                            'PEPE',
-                            'SHIB',
-                            'SOL',
-                            'SUSHI',
-                            'TRUMP',
-                            'UNI',
-                            'USDC',
-                            'USDG',
-                            'USDT',
-                            'XRP',
-                            'XTZ',
-                            'YFI']
+AVAILABLE_CRYPTO_ASSETS = ['AAVE', 'AVAX', 'BAT', 'BCH', 'BTC', 'CRV', 'DOGE', 'DOT', 'ETH', 'GRT', 'LINK', 'LTC', 'MKR', 'PEPE', 'SHIB', 'SOL', 'SUSHI', 'TRUMP', 'UNI', 'USDC', 'USDG', 'USDT', 'XRP', 'XTZ', 'YFI']
 
 ALPACA_RESPONSE_CODES = {
     200: "Success",
@@ -73,13 +49,7 @@ class BaseDataProvider(ABC):
     """Abstract base class for data providers"""
     
     @abstractmethod
-    async def get_historical_data(
-        self,
-        symbol: str,
-        start_date: datetime,
-        end_date: datetime,
-        timeframe: str
-    ) -> pl.DataFrame:
+    async def get_historical_data(self, symbol: str, start_date: datetime, end_date: datetime, timeframe: str) -> pl.DataFrame:
         """Get historical OHLCV data"""
         pass
     
@@ -90,7 +60,7 @@ class BaseDataProvider(ABC):
     
     @abstractmethod
     async def get_crypto_quote(self, symbols: list[str]) -> pl.DataFrame:
-        """Get crypto quote from Alpaca"""
+        """Get crypto quote from Provider"""
         pass
     
     def get_provider_timeframe(self, timeframe: str) -> Union[str, Tuple[str, int], None]:
@@ -112,255 +82,290 @@ class YahooFinanceProvider(BaseDataProvider):
     def get_provider_name(self) -> str:
         return 'yahoo'
     
-    async def get_historical_data(
-        self,
-        symbol: str,
-        start_date: datetime,
-        end_date: datetime,
-        timeframe: str
-    ) -> pl.DataFrame:
+    async def get_historical_data(self, symbol: str, start_date: datetime, end_date: datetime, timeframe: str) -> pl.DataFrame:
         """Get historical data from Yahoo Finance"""
-        # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         
         def fetch_data():
             ticker = yf.Ticker(symbol)
             interval = self.get_provider_timeframe(timeframe) or '1d'
+            df = ticker.history(start=start_date, end=end_date, interval=interval, auto_adjust=True)
             
-            df = ticker.history(
-                start=start_date,
-                end=end_date,
-                interval=interval,
-                auto_adjust=True
-            )
-            
-            # Rename columns to lowercase
+            # Normalize columns
             df.columns = df.columns.str.lower()
+            df = df.reset_index()
             
-            # Ensure we have all required columns
+            # Rename 'Date' or 'Datetime' to 'timestamp'
+            if 'Date' in df.columns:
+                df = df.rename(columns={'Date': 'timestamp'})
+            elif 'Datetime' in df.columns:
+                df = df.rename(columns={'Datetime': 'timestamp'})
+                
             required_columns = ['open', 'high', 'low', 'close', 'volume']
             for col in required_columns:
                 if col not in df.columns:
-                    df[col] = 0
-            
-            logger.info(f"Yahoo Finance data for {symbol}: {df.to_json(orient='records')}")
-            return df
+                    df[col] = 0.0
+                    
+            if not df.empty:
+                return pl.from_pandas(df)
+            return pl.DataFrame()
         
         return await loop.run_in_executor(None, fetch_data)
     
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """Get current quote from Yahoo Finance"""
         loop = asyncio.get_event_loop()
-        
         def fetch_quote():
             ticker = yf.Ticker(symbol)
             info = ticker.info
-            
             return {
                 'symbol': symbol,
                 'price': info.get('regularMarketPrice', 0),
                 'bid': info.get('bid', 0),
                 'ask': info.get('ask', 0),
                 'volume': info.get('regularMarketVolume', 0),
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(timezone.utc)
             }
-        
         return await loop.run_in_executor(None, fetch_quote)
+    
+    async def get_crypto_quote(self, symbols: list[str]) -> pl.DataFrame:
+        logger.warning("Yahoo Finance provider does not support bulk crypto quotes efficiently.")
+        return pl.DataFrame() # Must return empty DataFrame, not None
 
 class AlpacaProvider(BaseDataProvider):
     """Alpaca Markets data provider"""
     
-    def __init__(self, api_key: str, secret_key: str, base_url: str = 'https://data.alpaca.markets/v2'):
+    STOCKS_BASE_URL = "https://data.alpaca.markets/v2/stocks"
+    CRYPTO_BASE_URL = "https://data.alpaca.markets/v1beta3/crypto/us"
+    
+    # Common crypto symbols (without /USD suffix)
+    CRYPTO_SYMBOLS = {
+        "BTC", "ETH", "DOGE", "LTC", "BCH", "LINK", "UNI", "AAVE", 
+        "AVAX", "BAT", "CRV", "DOT", "GRT", "MKR", "SHIB", "SOL",
+        "SUSHI", "XTZ", "YFI", "ALGO", "ATOM", "FIL", "MATIC", "XLM", "TRUMP", "PEPE", "USDG"
+    }
+    
+    def __init__(self, api_key: str, secret_key: str, base_url: str = None):
         self.api_key = api_key
         self.secret_key = secret_key
-        self.base_url = base_url
         self.headers = {
-            "APCA-API-KEY-ID": self.api_key,
-            "APCA-API-SECRET-KEY": self.secret_key,
-            "Content-Type": "application/json"
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key
         }
-    
+
     def get_provider_name(self) -> str:
         return 'alpaca'
     
-    async def get_historical_data(self,
-                                  symbols: List[str],
-                                  start_date: datetime,
-                                  end_date: datetime,
-                                  timeframe: str
-                                  ) -> pl.DataFrame:
-        """
-        Fetches historical bar data for multiple symbols from Alpaca, handling pagination.
+    def _is_crypto_symbol(self, symbol: str) -> bool:
+        # Check standard list or if it ends with USD
+        base_symbol = symbol.replace("/USD", "").replace("-USD", "").upper()
+        return base_symbol in self.CRYPTO_SYMBOLS or symbol.endswith("/USD")
+    
+    def _normalize_crypto_symbols(self, symbols: List[str]) -> List[str]:
+        normalized = []
+        for symbol in symbols:
+            base = symbol.replace("/USD", "").replace("-USD", "").upper()
+            normalized.append(f"{base}/USD")
+        return normalized
+    
+    def _separate_symbols(self, symbols: List[str]) -> tuple[List[str], List[str]]:
+        stocks = []
+        crypto = []
+        for symbol in symbols:
+            if self._is_crypto_symbol(symbol):
+                crypto.append(symbol)
+            else:
+                stocks.append(symbol)
+        return stocks, crypto
 
-        Args:
-            symbols: A list of stock symbols.
-            start_date: The start date for the historical data.
-            end_date: The end date for the historical data.
-            timeframe: The timeframe for the bars (e.g., '1D', '1H', '1Min').
-
-        Returns:
-            A Polars DataFrame containing the historical data with a 'symbol' column.
-            Returns an empty DataFrame if no data is found or an error occurs.
-        """
-
-        timeframe_str = TIMEFRAME_MAPPINGS[timeframe].get('alpaca')
-        logger.info(f"DEBUG: Data Provider: Alpaca: Timeframe: {timeframe_str}")
-        async with aiohttp.ClientSession() as session:
-            stocks_url = f"{self.base_url}/v2/stocks/bars"
-            crypto_url = f"{self.base_url}/v1beta3/crypto/us/bars"
+    async def get_historical_data(self, symbols: List[str], start_date: datetime, end_date: datetime, timeframe: str = "1Day") -> pl.DataFrame:
+        if isinstance(symbols, str):
+            symbols = [symbols]
             
-            crypto_symbols = []
-            stocks_symbols = []
-            
-            logger.info(f"DEBUG: ALPACA_PROVIDER: Symbols: {symbols}, type: {type(symbols)}")
-
-            for symbol in symbols:
-                logger.info(f"DEBUG: Individual Symbols ALPACA_PROVIDER: Symbol: {symbol}, type: {type(symbol)}")
-                if symbol.upper() in AVAILABLE_CRYPTO_ASSETS:
-
-                    crypto_symbols = [f"{symbol}/USD" for symbol in symbols]
-                else:
-                    stocks_symbols.append(symbol)
-
-            logger.info(f"DEBUG: ALPACA_PROVIDER: Crypto symbols: {crypto_symbols}")
-            logger.info(f"DEBUG: ALPACA_PROVIDER: Stocks symbols: {stocks_symbols}")
-            
-            
-            all_bars = []
-            # Fetch stocks data
-            if len(stocks_symbols) > 0:
-                params = {
-                    'symbols': ','.join(stocks_symbols),
-                    'timeframe': timeframe_str,
-                    'start': start_date.strftime('%Y-%m-%d'),
-                    'end': end_date.strftime('%Y-%m-%d'),
-                    'limit': 10000
-                }
-                
-                page_token = None
-                while True:
-                    async with session.get(stocks_url, headers=self.headers, params=params) as response:
-                        response.raise_for_status()
-
-                        if response.status == 200:
-                            data = await response.json()
-                            bars_data = data.get('bars')
-                            if bars_data:
-                                for symbol, symbol_bars in bars_data.items():
-                                    for bar in symbol_bars:
-                                        bar['symbol'] = symbol
-                                        all_bars.append(bar)
-                            page_token = data.get('next_page_token')
-                            if not page_token:
-                                break
-                            params['page_token'] = page_token
-                        else:
-                            logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
-                            return pl.DataFrame()
-                    await asyncio.sleep(0.3)  # Added delay to avoid rate limiting
-
-            # Fetch crypto data
-            if len(crypto_symbols) > 0:
-                params = {
-                    'symbols': ','.join(crypto_symbols),
-                    'timeframe': timeframe_str,
-                    'start': start_date.strftime('%Y-%m-%d'),
-                    'end': end_date.strftime('%Y-%m-%d'),
-                    'limit': 10000
-                }
-
-                page_token = None
-                while True:
-                    async with session.get(crypto_url, headers=self.headers, params=params) as response:
-                        response.raise_for_status()
-                        if response.status == 200:
-                            data = await response.json()
-                            crypto_bars_data = data.get('bars')
-                            if crypto_bars_data:
-                                for crypto_symbol, crypto_symbol_bars in crypto_bars_data.items():
-                                    for bar in crypto_symbol_bars:
-                                        bar['symbol'] = crypto_symbol.rstrip('/USD')
-                                        all_bars.append(bar)
-                            page_token = data.get('next_page_token')
-                            if not page_token:
-                                break
-                            params['page_token'] = page_token
-                        else:
-                            logger.warning(f"Alpaca bar for {symbol}: Status {response.status}")
-                            logger.error(f"{ALPACA_RESPONSE_CODES[response.status]}")
-                            return pl.DataFrame()
-                    await asyncio.sleep(0.3)  # Added delay to avoid rate limiting
-
-            df = pl.DataFrame(all_bars)
-
-            if not df.is_empty():
-                #logger.info(f"Alpaca data for {symbols}: {df.to_dicts()}")
-                df = df.with_columns(
-                    pl.col("t").str.to_datetime(format="%Y-%m-%dT%H:%M:%S%.fZ", time_zone="America/New_York").alias("timestamp")
-                ).rename({
-                'o': 'open',
-                'h': 'high',
-                'l': 'low',
-                'c': 'close',
-                'v': 'volume',
-                'vw': 'vwap'
-            })
-            # Ensure all required columns are present before selecting
-            required_cols = ['symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'vwap']
-            # Filter out columns that are not in the DataFrame
-            existing_cols = [col for col in required_cols if col in df.columns]
-            logger.info(f"DEBUG: ALPACA_PROVIDER: Existing columns: {df.head(10)}")
-            
-            return df.select(existing_cols)
+        stock_symbols, crypto_symbols = self._separate_symbols(symbols)
+        all_data = []
         
+        async with aiohttp.ClientSession() as session:
+            if stock_symbols:
+                stock_data = await self._fetch_stock_bars(session, stock_symbols, start_date, end_date, timeframe)
+                all_data.extend(stock_data)
+            
+            if crypto_symbols:
+                crypto_data = await self._fetch_crypto_bars(session, crypto_symbols, start_date, end_date, timeframe)
+                all_data.extend(crypto_data)
+        
+        if not all_data:
+            return pl.DataFrame()
+        
+        # Concat and Sort
+        df = pl.concat(all_data)
+        if "timestamp" in df.columns:
+            df = df.sort("timestamp")
+        return df
     
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
-        """Get current quote from Alpaca"""
+        url = f"{self.STOCKS_BASE_URL}/snapshots"
+        params = {"symbols": symbol}
+        
         async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}/v2/stocks/{symbol}/quotes/latest"
-            
-            async with session.get(url, headers=self.headers) as response:
-                data = await response.json()
-                
-                if 'quote' in data:
-                    quote = data['quote']
-                    return {
-                        'symbol': symbol,
-                        'price': quote.get('ap', 0),  # ask price
-                        'bid': quote.get('bp', 0),     # bid price
-                        'ask': quote.get('ap', 0),     # ask price
-                        'volume': quote.get('as', 0),  # ask size
-                        'timestamp': pl.to_datetime(quote.get('t'))
-                    }
-                else:
-                    return {}
-
-    async def get_asset_list(self):
-        """Get list of assets from Alpaca"""
-        async with aiohttp.ClientSession() as session:
-            url = "https://paper-api.alpaca.markets/v2/assets"
-            async with session.get(url, headers=self.headers) as response:
-                data = await response.json()
-                return data
+            async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if symbol in data:
+                        snap = data[symbol]
+                        trade = snap.get('latestTrade', {})
+                        quote = snap.get('latestQuote', {})
+                        return {
+                            'symbol': symbol,
+                            'price': trade.get('p', 0),
+                            'bid': quote.get('bp', 0),
+                            'ask': quote.get('ap', 0),
+                            'volume': snap.get('dailyBar', {}).get('v', 0),
+                            'timestamp': datetime.now(timezone.utc)
+                        }
+        return {'symbol': symbol, 'price': 0, 'volume': 0, 'timestamp': datetime.now(timezone.utc)}
 
     async def get_crypto_quote(self, symbols: list[str]) -> pl.DataFrame:
-        """Get crypto quote from Alpaca"""
+        """Get current crypto quotes normalized to match Polygon schema"""
+        if not symbols:
+            return pl.DataFrame()
 
-        for symbol in symbols:
-            if symbol not in AVAILABLE_CRYPTO_ASSETS:
-                raise ValueError(f"Symbol {symbol} is not a tradable crypto asset on Alpaca")
+        _, crypto_symbols = self._separate_symbols(symbols)
+        if not crypto_symbols:
+            return pl.DataFrame()
 
-        symbols = ['/USD'.join(x) for x in symbols]
-
+        normalized = self._normalize_crypto_symbols(crypto_symbols)
+        # Use v1beta3/crypto/us/snapshots
+        url = f"{self.CRYPTO_BASE_URL}/snapshots"
+        params = {"symbols": ",".join(normalized)}
+        
         async with aiohttp.ClientSession() as session:
-            base_url = "https://data.alpaca.markets/v1beta3/crypto/us/latest/bars"
-            params = {
-                'symbols': symbols
-            }
-            async with session.get(base_url, params=params) as response:
+            async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    snapshots = data.get('snapshots', {})
+                    
+                    rows = []
+                    for sym, snap in snapshots.items():
+                        trade = snap.get('latestTrade', {})
+                        quote = snap.get('latestQuote', {})
+                        daily = snap.get('dailyBar', {})
+                        
+                        price = float(trade.get('p', 0.0))
+                        bid = float(quote.get('bp', 0.0))
+                        ask = float(quote.get('ap', 0.0))
+                        
+                        # Match Polygon's expected schema (using 'close' as current price)
+                        rows.append({
+                            'symbol': sym.replace('/USD', ''),
+                            'timestamp': datetime.now(timezone.utc),
+                            'close': price,   # Important: strategies look for 'close'
+                            'price': price,   # Keep 'price' for backwards compat
+                            'open': float(daily.get('o', 0.0)),
+                            'high': float(daily.get('h', 0.0)),
+                            'low': float(daily.get('l', 0.0)),
+                            'volume': float(daily.get('v', 0.0)),
+                            'vwap': float(daily.get('vw', 0.0)),
+                            'bid_estimate': bid,
+                            'ask_estimate': ask,
+                            'mid_price': (bid + ask) / 2 if (bid and ask) else price
+                        })
+                    
+                    if rows:
+                        return pl.DataFrame(rows)
+                        
+        return pl.DataFrame()
+    
+    async def _fetch_stock_bars(self, session, symbols, start_date, end_date, timeframe):
+        url = f"{self.STOCKS_BASE_URL}/bars"
+        params = {
+            "symbols": ",".join(symbols),
+            "timeframe": self._convert_timeframe(timeframe),
+            "start": start_date.strftime("%Y-%m-%d"),
+            "end": end_date.strftime("%Y-%m-%d"),
+            "limit": 10000
+        }
+        return await self._fetch_bars(session, url, params)
+    
+    async def _fetch_crypto_bars(self, session, symbols, start_date, end_date, timeframe):
+        url = f"{self.CRYPTO_BASE_URL}/bars"
+        norm_symbols = self._normalize_crypto_symbols(symbols)
+        params = {
+            "symbols": ",".join(norm_symbols),
+            "timeframe": self._convert_timeframe(timeframe),
+            "start": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+            "end": end_date.strftime("%Y-%m-%dT23:59:59Z"),
+            "limit": 10000
+        }
+        return await self._fetch_bars(session, url, params)
+    
+    async def _fetch_bars(self, session, url, params):
+        all_data = []
+        while True:
+            async with session.get(url, headers=self.headers, params=params) as response:
+                if response.status != 200:
+                    logger.error(f"Error fetching data: {response.status}, url={url}")
+                    break
+                
                 data = await response.json()
-                data = pl.DataFrame(data['bars'])
-                return data
+                bars = data.get("bars", {})
+                
+                for symbol, symbol_bars in bars.items():
+                    if not symbol_bars: continue
+                    
+                    df = pl.DataFrame(symbol_bars)
+                    clean_sym = symbol.replace("/USD", "")
+                    df = df.with_columns(pl.lit(clean_sym).alias("symbol"))
+                    
+                    # Rename columns
+                    rename_map = {
+                        "t": "timestamp", 
+                        "o": "open", 
+                        "h": "high", 
+                        "l": "low", 
+                        "c": "close", 
+                        "v": "volume",
+                        "vw": "vwap" 
+                    }
+                    
+                    # Only rename what exists
+                    valid_renames = {k: v for k, v in rename_map.items() if k in df.columns}
+                    df = df.rename(valid_renames)
+                    
+                    # Ensure vwap exists and calculate if missing or zero
+                    if "vwap" not in df.columns:
+                        # Estimate VWAP using Typical Price as fallback
+                        df = df.with_columns(
+                            ((pl.col("high") + pl.col("low") + pl.col("close")) / 3).alias("vwap")
+                        )
+                    else:
+                        # If vwap exists but is 0 (often happens with some crypto feeds), recalculate
+                        df = df.with_columns(
+                            pl.when(pl.col("vwap") == 0)
+                            .then((pl.col("high") + pl.col("low") + pl.col("close")) / 3)
+                            .otherwise(pl.col("vwap"))
+                            .alias("vwap")
+                        )
+
+                    # Handle timestamp
+                    if "timestamp" in df.columns and df["timestamp"].dtype == pl.Utf8:
+                        df = df.with_columns(pl.col("timestamp").str.strptime(pl.Datetime, "%Y-%m-%dT%H:%M:%SZ").dt.convert_time_zone("UTC"))
+                    
+                    # Select safely
+                    available_cols = df.columns
+                    desired = ["timestamp", "open", "high", "low", "close", "volume", "vwap", "symbol"]
+                    df = df.select([c for c in desired if c in available_cols])
+                    all_data.append(df)
+                    
+                if "next_page_token" in data and data["next_page_token"]:
+                    params["page_token"] = data["next_page_token"]
+                else:
+                    break
+        return all_data
+
+    def _convert_timeframe(self, timeframe: str) -> str:
+        mapping = {'1MIN': '1Min', '5MIN': '5Min', '15MIN': '15Min', '30MIN': '30Min', '1H': '1Hour', '1D': '1Day', '1W': '1Week'}
+        return mapping.get(timeframe.upper().strip(), '1Day')
 
 class PolygonProvider(BaseDataProvider):
     """Polygon.io data provider"""

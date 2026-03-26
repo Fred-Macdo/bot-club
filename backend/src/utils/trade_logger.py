@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from .db_executor import run_db_operation
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class TradeLogger:
             'entry_reason': entry_reason,
             'exit_reason': exit_reason,
             'duration': (exit_time - entry_time).total_seconds() / 3600,  # This line correctly calculates duration for each trade.
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.now(tz=timezone.utc),
             'pnl_emoji': pnl_emoji,
             'data_context': data_context or []
         }

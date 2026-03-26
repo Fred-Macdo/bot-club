@@ -1,7 +1,7 @@
 # backend/src/routes/backtest_routes.py
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pydantic import BaseModel
 import uuid
 import asyncio
@@ -12,7 +12,7 @@ import json
 import logging
 from ..database.client import get_db
 from ..models.backtest import (
-    BacktestRunRequest,
+    BacktestParams,
     BacktestRunResponse,
     BacktestStatus,
     TradeDetail,
@@ -32,132 +32,15 @@ from ..dependencies import get_current_user_from_token
 from ..utils.redis_client import redis_client
 from ..services.default_strategies import get_default_strategies_from_db
 from ..utils.db_executor import run_db_operation
+#from ..tasks.backtest_task import run_backtest_task
+from ..services.backtest.backtest_runner import BacktestRunner
 
 router = APIRouter(tags=["backtest"])
 logger = logging.getLogger(__name__)
 
-# Async backtest execution
-async def run_backtest_async(
-    backtest_id: str,
-    user_id: str,
-    strategy_config: dict,
-    initial_capital: float,
-    timeframe: str,
-    start_date: str,
-    end_date: str,
-    data_provider: str,
-    db: Database
-):
-    """Run backtest asynchronously and update progress in Redis"""
-    try:
-        # Update status to running
-        await redis_client.hset(f"backtest:{backtest_id}", mapping={
-            "status": "running",
-            "progress": 0,
-            "user_id": user_id
-        })
-        
-        # Call backend services to run the backtest
-        try:
-            backend_services_url = "http://backend_services:8001"  # Docker service name
-            backtest_payload = {
-                "strategy_id": str(strategy_config.get('_id', strategy_config.get('id', ''))),
-                "user_id": user_id,
-                "initial_capital": initial_capital,
-                "start_date": start_date,
-                "end_date": end_date,
-                "timeframe": timeframe,
-                "data_provider": data_provider
-            }
-            
-            print(f"Calling backend_services with payload: {backtest_payload}")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{backend_services_url}/backtest/run",
-                    json=backtest_payload,
-                    timeout=300 # Backtests can take a while
-                )
-            
-            if response.status_code == 200:
-                # Backend services will handle the execution
-                results = response.json()
-                print(f"Backend services response: {results}")
-                
-                # Update status to completed
-                await redis_client.hset(f"backtest:{backtest_id}", mapping={
-                    "status": "completed",
-                    "progress": 100
-                })
-            else:
-                raise Exception(f"Backend services error: {response.text}")
-                
-        except httpx.RequestError as e:
-            raise Exception(f"Error calling backend_services: {e}")
-        except ImportError:
-            # Fallback to mock implementation if requests is not available
-            print("Warning: requests module not available, using mock implementation")
-            
-            # Simulate backtest execution
-            await asyncio.sleep(1)  # Simulate processing time
-            
-            
-            # Update status to completed
-            await redis_client.hset(f"backtest:{backtest_id}", mapping={
-                "status": "completed",
-                "progress": 100
-            })
-        
-        # Save results to database
-        strategy_name = strategy_config.get("name", "Unknown Strategy")
-        
-        backtest_result_data = {
-            "user_id": ObjectId(user_id),
-            "strategy_id": ObjectId(strategy_config['_id']),
-            "strategy_name": strategy_name,
-            "initial_capital": initial_capital,
-            "start_date": start_date,
-            "end_date": end_date,
-            "timeframe": timeframe,
-            "data_provider": data_provider,
-            "stats": results['stats'],
-            "equity_curve": results['equity_curve'],
-            "created_at": datetime.utcnow()
-        }
-        
-        insert_result = await run_db_operation(db.backtests.insert_one, backtest_result_data)
-        new_backtest_id = insert_result.inserted_id
-
-        # Save trades
-        if 'trades' in results and results['trades']:
-            trades_to_insert = []
-            for trade_data in results['trades']:
-                trade_data["backtest_id"] = new_backtest_id
-                trades_to_insert.append(trade_data)
-            await run_db_operation(db.trades.insert_many, trades_to_insert)
-        
-        # Update status to completed
-        await redis_client.hset(f"backtest:{backtest_id}", mapping={
-            "status": "completed",
-            "progress": 100
-        })
-        
-        # Set expiry for Redis data (24 hours)
-        await redis_client.expire(f"backtest:{backtest_id}", 86400)
-        
-    except Exception as e:
-        # Update status to failed
-        await redis_client.hset(f"backtest:{backtest_id}", mapping={
-            "status": "failed",
-            "error": str(e)
-        })
-        # Log error
-        print(f"Backtest {backtest_id} failed: {str(e)}")
-
-@router.post("/run", response_model=BacktestRunResponse)
+@router.post("/run")
 async def run_backtest(
-    request: BacktestRunRequest,
-    background_tasks: BackgroundTasks,
+    request: BacktestParams,
     current_user: UserInDB = Depends(get_current_user_from_token),
     db: Database = Depends(get_db)
 ):
@@ -171,72 +54,36 @@ async def run_backtest(
     Args:
         request: The backtest run request containing parameters like strategy_id,
                  capital, timeframe, start/end dates, and data provider.
-        background_tasks: FastAPI's background tasks manager to run the backtest
-                          process asynchronously.
         current_user: The authenticated user initiating the backtest.
         db: The database connection instance.
 
     Returns:
         A response containing the unique backtest_id and a confirmation message.
     """
-    # Validate dates
+
+    logger.info(f"Received backtest run request: {request.model_dump_json(indent=4)}")
+    logger.info(f"Current user ID: {current_user.id}")
+    logger.info(f"Database connection: {db}")
+    logger.info(f"strategy_id: {request.strategy_id}, type: {type(request.strategy_id)}")
+    
+    runner = BacktestRunner(db)
     try:
-        start = datetime.strptime(request.start_date, '%Y-%m-%d')
-        end = datetime.strptime(request.end_date, '%Y-%m-%d')
-        if start >= end:
-            raise ValueError("Start date must be before end date")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    
-    # Load strategy configuration
-    if request.strategy_type == 'default':
-        default_strategies = await get_default_strategies_from_db(db)
-        logger.info(f"Default strategies: {default_strategies}")
-        strategy_config = next((s for s in default_strategies if str(s["_id"]) == request.strategy_id), None)
-        if not strategy_config:
-            raise HTTPException(status_code=404, detail="Default strategy not found")
-    else:
-        # Load user strategy from database
-        print(
-        "current_user: ", current_user.userName, '\n',
-        "type: ", type(current_user), '\n',
-        "current_user_id", current_user.id, '\n',
-        "strategy_id: ", request.strategy_id, '\n',
-        "type_strategy_id", type(request.strategy_id)
+        result = await runner.run_backtest(
+            user_id=str(current_user.id),
+            strategy_id=request.strategy_id,
+            initial_capital=request.initial_capital,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            data_provider=request.data_provider,
+            timeframe=request.timeframe
         )
-
-        strategy = await run_db_operation(db.strategy.find_one, {
-            "_id": ObjectId(str(request.strategy_id))
-        })
-
-        if not strategy:
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        strategy_config = strategy
-    
-    if not strategy_config:
-        raise HTTPException(status_code=404, detail="Strategy configuration not found")
-    
-    # Generate backtest ID
-    backtest_id = str(uuid.uuid4())
-    
-    # Start backtest in background
-    background_tasks.add_task(
-        run_backtest_async,
-        backtest_id,
-        str(current_user.id),
-        strategy_config,
-        request.initial_capital,
-        request.timeframe,
-        request.start_date,
-        request.end_date,
-        request.data_provider,
-        db
-    )
-    
-    return BacktestRunResponse(
-        backtest_id=backtest_id,
-        message="Backtest started successfully"
-    )
+        return BacktestRunResponse(
+            backtest_id=result["backtest_id"],
+            message="Backtest started successfully"
+        )
+    except Exception as e:
+        logger.error(f"Error running backtest: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start backtest")
 
 @router.get("/status/{backtest_id}", response_model=BacktestStatus)
 async def get_backtest_status(
@@ -501,7 +348,7 @@ async def deploy_strategy(
         'mode': request.mode,
         'initial_capital': request.initial_capital,
         'status': 'active',
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.now(tz=timezone.utc).isoformat()
     }
     
     # Store deployment info in Redis (or database)
@@ -586,7 +433,7 @@ async def get_user_backtests_root(
             total_trades=stats.get("total_trades", 0),
             start_date=backtest.get("start_date", ""),
             end_date=backtest.get("end_date", ""),
-            created_at=backtest.get("created_at", datetime.utcnow())
+            created_at=backtest.get("created_at", datetime.now(tz=timezone.utc))
         )
         summaries.append(summary)
     return summaries

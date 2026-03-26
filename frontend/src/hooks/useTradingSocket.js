@@ -38,7 +38,7 @@ const useTradingSocket = (strategyId) => {
     webSocket.current.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        
+        console.log('Received WebSocket message type:', message.type);
         if (message.type === 'status') {
           setStatus(message.data.status);
         } else if (message.type === 'log') {

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Union, Any
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -126,9 +126,9 @@ def fix_strategy_document(doc: dict) -> dict:
         if 'is_paper' not in fixed_doc:
             fixed_doc['is_paper'] = True
         if 'created_at' not in fixed_doc:
-            fixed_doc['created_at'] = datetime.utcnow()
+            fixed_doc['created_at'] = datetime.now(tz=timezone.utc)
         if 'updated_at' not in fixed_doc:
-            fixed_doc['updated_at'] = datetime.utcnow()
+            fixed_doc['updated_at'] = datetime.now(tz=timezone.utc)
             
         return fixed_doc
         
@@ -156,16 +156,16 @@ async def create_strategy(db: AsyncIOMotorDatabase, strategy_data: UserStrategy,
         name=strategy_data.name,
         description=strategy_data.description,
         config=strategy_data.config.model_dump(),  # Convert config model to dict
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=datetime.now(tz=timezone.utc),
+        updated_at=datetime.now(tz=timezone.utc)
     )
     
     strategy_dict = strategy.model_dump(by_alias=True)
     result = await run_db_operation(db[STRATEGY_COLLECTION].insert_one, strategy_dict)
 
-    # Return the created strategy with the new ID
-    strategy.strategy_id = str(result.inserted_id)
-    return strategy
+    # Fetch the created strategy with the new ID
+    created_strategy = await get_strategy_by_id(db, result.inserted_id, user_id)
+    return created_strategy
 
 async def update_strategy(
     db: AsyncIOMotorDatabase, 
@@ -185,7 +185,7 @@ async def update_strategy(
         # If it's a model, dump it. If it's already a dict, leave it.
         pass
 
-    update_dict["updated_at"] = datetime.utcnow()
+    update_dict["updated_at"] = datetime.now(tz=timezone.utc)
     
     result = await run_db_operation(
         db[STRATEGY_COLLECTION].update_one,
@@ -219,7 +219,7 @@ async def toggle_strategy_status(
     result = await run_db_operation(
         db[STRATEGY_COLLECTION].update_one,
         {"_id": strategy_id, "user_id": user_id},
-        {"$set": {"is_active": is_active, "updated_at": datetime.utcnow()}}
+        {"$set": {"is_active": is_active, "updated_at": datetime.now(tz=timezone.utc)}}
     )
     
     if result.modified_count:
@@ -234,7 +234,7 @@ async def save_backtest_result(
 ) -> Backtest:
     """Save backtest results"""
     backtest_result.strategy_id = strategy_id
-    backtest_result.created_at = datetime.utcnow()
+    backtest_result.created_at = datetime.now(tz=timezone.utc)
     
     result_dict = backtest_result.dict(by_alias=True)
     result = await run_db_operation(db[BACKTEST_COLLECTION].insert_one, result_dict)

@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from pymongo import AsyncMongoClient
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Import the strategy models - adjust path for Docker environment
 try:
@@ -130,8 +130,8 @@ async def load_default_data(yaml_dir: str, db_uri: str, db_name: str):
                     "description": strategy.description,
                     "yaml_config": strategy_data,  # Keep original YAML for reference
                     "strategy_config": strategy.config.dict(),  # Validated config
-                    "created_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
+                    "created_at": datetime.now(tz=timezone.utc),
+                    "updated_at": datetime.now(tz=timezone.utc)
                 }
                 
                 result = await db.default_strategies.insert_one(default_strategy_doc)

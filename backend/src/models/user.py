@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from ..utils.mongo_helpers import PyObjectId
 
@@ -66,7 +66,7 @@ class UserUpdate(BaseModel):
 class UserInDB(UserBase):
     id: Optional[str] = Field(alias="_id", default=None)
     hashed_password: str
-    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    createdAt: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     
     @field_validator('id', mode='before')
     @classmethod

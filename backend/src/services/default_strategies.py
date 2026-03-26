@@ -1,7 +1,7 @@
     # backend/services/default_strategies.py
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 
@@ -142,8 +142,8 @@ async def initialize_default_strategies(db: Database) -> None:
             # Strategy doesn't exist, so create it
             await run_db_operation(default_strategies_collection.insert_one, {
                 **strategy,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(tz=timezone.utc),
+                "updated_at": datetime.now(tz=timezone.utc),
                 "version": "1.0"  # Version tracking for future updates
             })
             print(f"Created default strategy: {strategy['name']}")
@@ -203,7 +203,7 @@ async def update_default_strategies_if_needed(db: Database) -> None:
                     {
                         "$set": {
                             **strategy,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": datetime.now(tz=timezone.utc),
                             "previous_version": existing.get("version", "1.0"),
                             "version": "1.1"  # Increment version
                         }

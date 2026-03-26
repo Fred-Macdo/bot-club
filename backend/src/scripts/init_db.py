@@ -3,7 +3,7 @@ import os
 import sys
 import yaml
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add the src directory to Python path
 src_path = Path(__file__).parent.parent
@@ -52,8 +52,8 @@ async def initialize_default_strategies_collection():
                         "template_name": strategy_data['name'],
                         "template_description": strategy_data.get('description', ''),
                         "yaml_config": strategy_data,
-                        "created_at": datetime.utcnow(),
-                        "updated_at": datetime.utcnow()
+                        "created_at": datetime.now(tz=timezone.utc),
+                        "updated_at": datetime.now(tz=timezone.utc)
                     }
                     
                     result = await db.default_strategies.insert_one(default_strategy_doc)
@@ -97,7 +97,7 @@ async def initialize_database():
                 "username": "testuser",
                 "hashed_password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewgmNDqh.EKTjg6m",  # password: "testpass"
                 "is_active": True,
-                "created_at": datetime.utcnow()
+                "created_at": datetime.now(tz=timezone.utc)
             }
             await db.user.insert_one(test_user)
             logger.info(f"Created test user with ID: {test_user['_id']}")
@@ -148,8 +148,8 @@ async def create_user_strategies_from_defaults(db, user_id: PyObjectId):
                 "config": yaml_config,  # Store the entire YAML config
                 "is_active": False,
                 "is_paper": True,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
+                "created_at": datetime.now(tz=timezone.utc),
+                "updated_at": datetime.now(tz=timezone.utc)
             }
             
             result = await db.strategy.insert_one(strategy_doc)

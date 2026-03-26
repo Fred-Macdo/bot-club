@@ -4,17 +4,20 @@ from lumibot.backtesting import YahooDataBacktesting, AlpacaBacktesting, Polygon
 from lumibot.brokers import Alpaca
 from bson import ObjectId
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 from typing import Dict, Union, List, Any
 import numpy as np
 import polars as pl
 import logging
+from ...utils.json_encoder import CustomJSONEncoder
+from ...utils.portfolio_persistence import PortfolioPersistence
 
 from ...utils.indicator_factory import IndicatorFactory
 from ...utils.condition_checker import ConditionChecker
-from ...utils.indicator_converter import IndicatorConverter
+from ...utils.indicator_converter import convert_indicators_to_params
 from ...utils.trade_logger import TradeLogger
+from ...utils.enums import LogEventType
 from ...models.portfolio_models import *
 import json
 logger = logging.getLogger(__name__)
@@ -24,7 +27,7 @@ pd.set_option('display.precision', 2)
 np.set_printoptions(precision=2, suppress=True)  # Added suppress=True to avoid scientific notation
 
 
-class   CryptoStrategy(Strategy):
+class CryptoStrategy(Strategy):
     """
     This class takes in a yaml configuration file as a strategy and runs it using Lumibot lifecycle methods. 
 
@@ -45,24 +48,28 @@ class   CryptoStrategy(Strategy):
                    strategy_id=None,
                    db=None,
                    user_id=None,
-                   stream_publisher=None):
+                   stream_publisher=None,
+                   initial_capital=100000.0):
         
-        self.indicator_converter = IndicatorConverter()
+        
         self.strategy = strategy_config.get("config")
         self.symbols = self.strategy.get('symbols', [])
-        self.timeframe = self.strategy.get('timeframe', '15Min')
+        self.timeframe = self.strategy.get('timeframe', '15M')
         self.sleeptime = '10S'
-        self.params = self.indicator_converter.convert_indicators_to_params(self.strategy.get('indicators', []))
+        self.params = convert_indicators_to_params(self.strategy.get('indicators', []))
         self.entry_conditions = self.strategy.get('entry_conditions', [])
         self.exit_conditions = self.strategy.get('exit_conditions', [])
         self.risk_management = self.strategy.get('risk_management', {})
         self.set_market("24/7")
-        logger.info(f"Types for strategy config: symbols: {type(strategy_config.get("_id"))}, timeframe: {type(self.timeframe)}, params: {type(self.params)}, entry_conditions: {type(self.entry_conditions)}, exit_conditions: {type(self.exit_conditions)}, risk_management: {type(self.risk_management)}")
+        logger.info(f"Types for strategy config: symbols: {type(self.symbols)}, timeframe: {type(self.timeframe)}, params: {type(self.params)}, entry_conditions: {type(self.entry_conditions)}, exit_conditions: {type(self.exit_conditions)}, risk_management: {type(self.risk_management)}")
+        account_value = self.get_cash()
+        effective_capital = max(float(initial_capital), float(account_value))
+        logger.info(f"Initial capital: user_defined={initial_capital}, account_value={account_value}, effective={effective_capital}")
         self.portfolio = StrategyPortfolio(strategy_id=strategy_config.get("_id"),
                                            strategy_name=strategy_config.get("name", "Unnamed Strategy"),
                                            user_id=strategy_config.get("user_id"), 
-                                           initial_capital=self.get_cash(),
-                                           current_cash=self.get_cash(),
+                                           initial_capital=effective_capital,
+                                           current_cash=account_value,
                                            performance=PerformanceMetrics())
         self.condition_checker = ConditionChecker()
         self.dca_enabled = self.strategy.get('dca_enabled', False)
@@ -74,17 +81,42 @@ class   CryptoStrategy(Strategy):
         self.db = db
         self.user_id = user_id
         self.trade_counter = 0
+        
+        # Initialize persistence layer
+        self.persistence = PortfolioPersistence(
+            db=db,
+            stream_publisher=stream_publisher,
+            strategy_id=strategy_id,
+            user_id=user_id
+        )
 
-    def log_message(self, message, level='info', color=None, broadcast=True):
+    def log_message(self, message, level='info', color=None, broadcast=True, event_type=LogEventType.LOG):
         # Fix: Do not pass 'broadcast' to the parent method
         super().log_message(message, level, color)
         
         if broadcast and hasattr(self, 'stream_publisher') and self.stream_publisher:
-             self.stream_publisher("log", {
+             payload = {
+                 "event_type": event_type,
                 "timestamp": datetime.now().timestamp() * 1000, 
                 "level": str(level).upper(), 
                 "message": str(message)
-            })
+            }
+             
+             # Attempt to parse message if it looks like a JSON object (for rich data)
+             if isinstance(message, str) and message.strip().startswith('{'):
+                 try:
+                     import json
+                     data = json.loads(message)
+                     if isinstance(data, dict):
+                         payload['data'] = data
+                         # If it's a data wrapping object, use title/description as the main message text
+                         if 'title' in data:
+                             payload['message'] = data['title']
+                 except:
+                     # Not valid JSON, ignore
+                     pass
+
+             self.stream_publisher("log", payload)
 
     def _emit_log(self, message, level="INFO"):
         self.log_message(message, level=level)
@@ -97,22 +129,30 @@ class   CryptoStrategy(Strategy):
         positions = self.get_positions()
         self.log_message(f"Date: {self.get_datetime()}")
         self.log_message(f"Cash Balance: {cash:.2f}")
-        self.log_message(f"Current Positions: {positions}")
-        self.log_message(f"Account Value: {self.get_portfolio_value():.2f}")
-        # If the cash balance is less than 0, sell all positions and sleep
-        # 1. Get the assets
-        # 2. Get the last price for each asset
-        # 3. Get the data for each asset
-        # 4. Calculate the indicators for each asset
-        # 5. Check the exit conditions for each asset
-        # 6. If we have a position, check if the exit conditions are met, if so; sell all positions for that asset
-        # 7. if we have a position, check if the stop loss is hit, if so; sell all positions for that asset
-        # 8. if we have a position, check if the take profit is hit, if so; sell all positions for that asset
-        # 9. if we have a position, check if the DCA entry conditions are met, if so; buy the asset
-        # 10. If we don't have a position, check if the entry conditions are met, if so; buy the asset
 
-        self.log_message(f"Symbols: {self.symbols}")
-        self.log_message(f"Params: {self.params}")
+        # Send structured positions data for frontend components
+        positions_data = []
+        for pos in positions:
+            pos_data = {
+                "symbol": pos.asset.symbol if hasattr(pos, 'asset') and hasattr(pos.asset, 'symbol') else str(pos),
+                "quantity": float(pos.quantity) if hasattr(pos, 'quantity') else 0,
+            }
+            positions_data.append(pos_data)
+        self.log_message(
+            json.dumps({"title": f"Current Positions ({len(positions)} open)", "positions": positions_data}),
+            event_type=LogEventType.POSITIONS
+        )
+
+        # Send structured account value data for frontend components
+        acct_value = self.get_portfolio_value()
+        self.log_message(
+            json.dumps({"title": f"Account Value: ${acct_value:.2f}", "account_value": float(acct_value), "cash": float(cash)}),
+            event_type=LogEventType.ACCOUNT_VALUE
+        )
+        
+        # Track latest prices for all assets
+        latest_prices = {}
+
         #Lumibot Assets
         assets = [Asset(x, asset_type=Asset.AssetType.CRYPTO) for x in self.symbols]
         for asset in assets: 
@@ -141,34 +181,27 @@ class   CryptoStrategy(Strategy):
                 df_to_log = (
                     df.tail(n_rows)
                       .with_columns(pl.col(pl.Float64).round(4))
-                      .to_pandas()
-                )
-
-                # Build a table-style string
-                indicator_table = df_to_log.to_string(index=False)
-
-                self.log_message(
-                    f"Technical indicators (last {n_rows} rows):\n" + indicator_table
-                )
+                      )
 
                 # Keep the JSON payload for the frontend to render as a table if needed
-                df_json_string = df_to_log.to_json(orient="records")
+                df_json_string = df_to_log.write_json()
                 df_data = json.loads(df_json_string)
                 log_payload = {
                     "type": "dataframe",
                     "title": f"Technical Indicators for {asset.symbol}",
                     "data": df_data
                 }
-                self.log_message(json.dumps(log_payload, indent=4))
+                self.log_message(json.dumps(log_payload, indent=4), event_type=LogEventType.PRICE_DATAFRAME)
 
                 latest_data = df.row(-1, named=True)
+                latest_prices[asset.symbol] = latest_data['close']  # Store for portfolio update
                 entry_conditions, entry_data_context = self._check_entry_conditions(latest_data)
             self.log_message(f"Position: {position}, type: {type(position)}")
             if position:
                 # 5. IF WE HAVE A POSITION, CHECK THE EXIT CONDITIONS
                 exit_conditions, exit_reason, exit_data_context = self._check_exit_conditions(latest_data, asset)
                 if exit_conditions:
-                    self.log_message(f"Exit conditions met for {asset.symbol}: {exit_reason}")
+                    self.log_message(f"Exit conditions met for {asset.symbol}: {exit_reason}", event_type=LogEventType.EXIT_CONDITIONS)
                     self._emit_log(f"🔴 EXIT: {asset.symbol} - {exit_reason}", "WARNING")
                     self.log_message(f"Exit data context: {exit_data_context}")
                     self.log_message(f"Exit conditions: {exit_conditions}")
@@ -193,27 +226,20 @@ class   CryptoStrategy(Strategy):
                     )
                     
                     self.portfolio.update_performance_metrics()
-                    # self.portfolio.update_equity_curve(current_prices={asset.symbol: latest_data['close']}) # TODO: Pass all current prices
                     
-                    # Emit completed trades with full P&L details
+                    # Persist completed trades to MongoDB and Redis
                     for trade in completed_trades:
-                        self._emit_completed_trade(trade)
+                        self.persistence.save_completed_trade(trade)
                         self._emit_log(f"📈 TRADE CLOSED: {trade.symbol} | P&L: ${trade.realized_pnl:.2f}")
                     
-                    # Also emit simple transaction event for real-time feedback
                     self._emit_trade_event("sell", asset.symbol, position.quantity, latest_data['close'])
-                    self._emit_position_update()
-                    self._emit_metrics_update()
                 
-                # 9. if we have a position, check if the DCA entry conditions are met, 
-                #    if so; buy the asset
-                
+                # 9. if we have a position, check if the DCA entry conditions are met
                 if entry_conditions:
                     self.log_message(f"Entry conditions met for {asset.symbol}: {entry_data_context}")  
                     self._emit_log(f"🟢 ENTRY: {asset.symbol}")
                     self.log_message(f"Entry conditions: {entry_conditions}")
                     self.log_message(f"Entry data context: {entry_data_context}")
-                    # 10. EVALUATES TO TRUE OR FALSE, IF TRUE BUY THE ASSET
                     position_size = self._calculate_position_size(asset, latest_data)
                     position_size = max(self.risk_management.get('max_position_size', 10000), int(position_size))
                     quote = Asset("USD", asset_type="forex")
@@ -226,8 +252,7 @@ class   CryptoStrategy(Strategy):
                     )
                     self.submit_order(order)
                     self.wait_for_order_execution(order)
-                    #avg_fill_price = self.get_order(order).avg_fill_price
-                    # Create PositionLot
+                    
                     new_lot = PositionLot(
                         symbol=asset.symbol,
                         quantity=Decimal(str(position_size)),
@@ -238,20 +263,18 @@ class   CryptoStrategy(Strategy):
                         user_id=str(self.portfolio.user_id)
                     )
                     self.portfolio.add_buy(new_lot)
-                    self._emit_log(f"✅ BUY: {new_lot.quantity} {new_lot.symbol} @ ${new_lot.entry_price:.2f}")
                     
-                    # Emit trade and position events
-                    #self._emit_trade_event("buy", asset.symbol, position_size, latest_data['close'])
-                    #self._emit_position_update()
-                    #self._emit_metrics_update()
-            # 10. If we don't have a position, check if the entry conditions are met, if so; buy the asset
+                    # Persist buy to MongoDB and Redis
+                    self.persistence.save_buy(new_lot)
+                    self._emit_log(f"✅ BUY: {new_lot.quantity} {new_lot.symbol} @ ${new_lot.entry_price:.2f}")
+
+            # 10. If we don't have a position, check if the entry conditions are met
             else:
                 if entry_conditions:
                     self.log_message(f"Entry conditions met for {asset.symbol}: {entry_data_context}")
                     self._emit_log(f"🟢 ENTRY: {asset.symbol} conditions met")
                     self.log_message(f"Entry conditions: {entry_conditions}")
                     self.log_message(f"Entry data context: {entry_data_context}")
-                    # 10. EVALUATES TO TRUE OR FALSE, IF TRUE BUY THE ASSET
                     position_size = self._calculate_position_size(asset, latest_data)
                     position_size = max(self.risk_management.get('max_position_size', 10000), int(position_size))
                     quote = Asset("USD", asset_type="forex")
@@ -264,7 +287,7 @@ class   CryptoStrategy(Strategy):
                     )
                     self.submit_order(order)
                     self.wait_for_order_execution(order)
-                    #avg_fill_price = self.get_order(order).avg_fill_price
+                    
                     new_lot = PositionLot(
                         symbol=asset.symbol,
                         quantity=Decimal(str(position_size)),
@@ -276,20 +299,31 @@ class   CryptoStrategy(Strategy):
                         alpaca_order_id=str(order.id)
                     )
                     self.portfolio.add_buy(new_lot)
-
-                    self.portfolio.update_equity_curve(current_prices={asset.symbol: Decimal(str(latest_data['close']))})
+                    
+                    # Persist buy to MongoDB and Redis
+                    self.persistence.save_buy(new_lot)
 
                     self.log_message(f"New Position: {new_lot}")
                     self.log_message(f"Entry: \n Buying {position_size} shares of {asset} at price {df['close'][-1]:.2f}")
                     self._emit_log(f"✅ BUY: {position_size} {asset.symbol} @ ${latest_data['close']:.2f}")
 
-
+        # End of trading iteration - save portfolio snapshot
         self.log_message("Saving portfolio snapshot to DB")
-        self.log_message(f"Portfolio snapshot: ")
         self.portfolio.update_performance_metrics()
-        self.portfolio.update_equity_curve(current_prices={asset.symbol: Decimal(str(latest_data['close']))})
-        logger.log(logging.DEBUG, f"Portfolio before snapshot: {self.portfolio.model_dump()}")
-        self._emit_portfolio_update(latest_prices={asset.symbol: latest_data['close']})
+        
+        snapshot_data = self.portfolio.model_dump()
+        snapshot_data['user_id'] = str(snapshot_data['user_id'])
+        snapshot_data['strategy_id'] = str(snapshot_data['strategy_id'])
+        self.log_message(
+            self.portfolio.model_dump_json(indent=4, exclude={'user_id', 'strategy_id'}),
+            event_type=LogEventType.PORTFOLIO_SNAPSHOT
+        )
+        
+        # Persist portfolio snapshot to MongoDB and publish full update to Redis
+        self.persistence.save_portfolio_snapshot(self.portfolio, latest_prices)
+        
+        # Also sync full portfolio state for recovery purposes
+        self.persistence.sync_portfolio_to_db(self.portfolio)
 
         self.log_message("**********************************************************************************")
         self.log_message("**********************************************************************************")
@@ -313,9 +347,7 @@ class   CryptoStrategy(Strategy):
     def _check_exit_conditions(self, row: pd.Series, asset: Asset) -> bool:
         """Check if any exit condition is met"""
         return self.condition_checker.check_exit_conditions(conditions=self.exit_conditions, 
-                                                       row=row,
-                                                       position=self.get_position(asset), 
-                                                       current_time=self.get_datetime())
+                                                       row=row)
     
     def _calculate_position_size(self, asset: Asset, latest_data: Dict[str, Any]) -> float:
         """Calculates position size based on risk management settings."""
@@ -386,7 +418,7 @@ class   CryptoStrategy(Strategy):
 
     def _update_portfolio_snapshot(self, latest_prices: Dict[str, float]) -> PortfolioSnapshot:
         """Update portfolio snapshot"""
-        timestamp = datetime.utcnow()
+        timestamp = datetime.now(tz=timezone.utc)
         cash = Decimal(self.get_cash())
         positions_value = self._get_positions_value(latest_prices)
         total_value = cash + positions_value
@@ -394,6 +426,8 @@ class   CryptoStrategy(Strategy):
         #realized_pnl = self.portfolio.performance.realized_pnl
 
         values = {
+            "user_id": self.portfolio.user_id,
+            "strategy_id": self.portfolio.strategy_id,
             "timestamp": timestamp,
             "cash": cash,
             "positions_value": positions_value,
@@ -404,13 +438,5 @@ class   CryptoStrategy(Strategy):
         return PortfolioSnapshot(**values)
 
     def _emit_portfolio_update(self, latest_prices: Dict[str, float]):
-        """Emit portfolio update event"""
-        self._update_portfolio_snapshot(latest_prices)
-        self.log_message(f"Emitting portfolio update event: {self.portfolio.model_dump()}")
-        
-        if self.event_queue:
-            self.event_queue.put({
-                "type": "portfolio_update",
-                "strategy_id": str(self.strategy_id),
-                "portfolio": self.portfolio.model_dump_json()
-            })  
+        """Emit portfolio update event - now handled by persistence layer"""
+        self.persistence.save_portfolio_snapshot(self.portfolio, latest_prices)

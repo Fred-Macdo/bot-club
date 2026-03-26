@@ -3,11 +3,11 @@ Portfolio Data Models for Live Strategy Executor
 Tracks positions, lots, trades, and performance for live trading     strategies
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 import uuid
 from bson import ObjectId
 
@@ -81,7 +81,7 @@ class PositionLot(BaseModel):
     quantity: Decimal = Field(..., description="Number of shares in this lot")
     entry_price: Decimal = Field(..., description="Purchase price per share")
     entry_time: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="Time of purchase"
     )
     cost_basis: Decimal = Field(
@@ -128,7 +128,7 @@ class PositionLot(BaseModel):
     
     def get_holding_period_days(self, current_time: datetime = None) -> int:
         """Calculate holding period in days"""
-        current_time = current_time or datetime.utcnow()
+        current_time = current_time or datetime.now(tz=timezone.utc)
         return (current_time - self.entry_time).days
 
 
@@ -250,7 +250,7 @@ class OrderExecution(BaseModel):
     
     # Timestamps
     submitted_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="When order was submitted"
     )
     filled_at: Optional[datetime] = Field(None, description="When order was filled")
@@ -297,7 +297,7 @@ class PortfolioSnapshot(BaseModel):
         description="Unique snapshot identifier"
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="Snapshot timestamp"
     )
     
@@ -321,8 +321,15 @@ class PortfolioSnapshot(BaseModel):
     lot_count: int = Field(default=0, description="Total number of lots")
     
     # Strategy tracking
-    strategy_id: ObjectId = Field(..., description="Strategy ID")
-    user_id: ObjectId = Field(..., description="User ID")
+    strategy_id: str = Field(..., description="Strategy ID")
+    user_id: str = Field(..., description="User ID")
+    
+    @field_validator('strategy_id', 'user_id', mode='before')
+    @classmethod
+    def coerce_objectid_to_str(cls, v):
+        if isinstance(v, ObjectId):
+            return str(v)
+        return v
     
     @field_validator('total_value', 'cash', 'positions_value', 'unrealized_pnl', 'realized_pnl', mode='before')
     @classmethod
@@ -386,7 +393,7 @@ class PerformanceMetrics(BaseModel):
     
 
     calculated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="When metrics were calculated"
     )
     
@@ -404,9 +411,14 @@ class StrategyPortfolio(BaseModel):
     Main model that aggregates all portfolio information
     """
     model_config = ConfigDict(
-        json_encoders={Decimal: str, datetime: lambda v: v.isoformat()},
+        json_encoders={
+            Decimal: str, 
+            datetime: lambda v: v.isoformat(),
+            ObjectId: str
+        },
         arbitrary_types_allowed=True
     )
+    
     
     portfolio_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
@@ -414,9 +426,17 @@ class StrategyPortfolio(BaseModel):
     )
     
     # Identification
-    strategy_id: ObjectId = Field(..., description="Strategy ID")
-    user_id: ObjectId = Field(..., description="User ID")
+    strategy_id: str = Field(..., description="Strategy ID")
+    user_id: str = Field(..., description="User ID")
     strategy_name: str = Field(..., description="Strategy name")
+
+    @field_validator("strategy_id", "user_id", mode="before")
+    @classmethod
+    def _coerce_to_str(cls, v):
+        """Accept both ObjectId and str, always store as str."""
+        if isinstance(v, ObjectId):
+            return str(v)
+        return v
     
     # Capital
     initial_capital: Decimal = Field(..., description="Initial capital")
@@ -461,14 +481,27 @@ class StrategyPortfolio(BaseModel):
     # Status
     is_active: bool = Field(default=True, description="Whether portfolio is active")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="Portfolio creation time"
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="Last update time"
     )
     
+    @model_validator(mode='before')
+    @classmethod
+    def set_default_cash(cls, data: Any) -> Any:
+        """
+        If current_cash is missing, initialize it from initial_capital.
+        This allows creating the portfolio with just initial_capital.
+        """
+        if isinstance(data, dict):
+            if 'current_cash' not in data and 'initial_capital' in data:
+                data['current_cash'] = data['initial_capital']
+        return data
+
+    # Now this validator matches the field name 'current_cash'
     @field_validator('initial_capital', 'current_cash', mode='before')
     @classmethod
     def parse_decimal(cls, v):
@@ -642,7 +675,7 @@ class StrategyPortfolio(BaseModel):
         self.performance.largest_win = largest_win
         self.performance.largest_loss = largest_loss
         self.performance.avg_holding_period_days = avg_holding_period
-        self.performance.calculated_at = datetime.utcnow()
+        self.performance.calculated_at = datetime.now(tz=timezone.utc)
 
     def update_equity_curve(self, current_prices: Dict[str, Decimal]):
         """
@@ -742,7 +775,7 @@ class StrategyPortfolioDocument(BaseModel):
     is_active: bool = Field(default=True)
     
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     
     model_config = ConfigDict(populate_by_name=True)

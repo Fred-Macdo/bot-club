@@ -246,65 +246,6 @@ async def toggle_strategy_trading(
     
     return updated_strategy
 
-# Background task for running backtests
-async def run_backtest_task(
-    db: Database,
-    strategy: Strategy,
-    params: BacktestParams,
-    user_id: str
-):
-    """Background task to run backtest via backend_services"""
-    try:
-        from ..services.backtest_client import BacktestServiceClient
-        
-        # Create client for backend_services
-        backtest_client = BacktestServiceClient()
-        
-        # Start backtest on backend_services
-        execution_id = await backtest_client.start_backtest(strategy, params, user_id)
-        
-        if execution_id:
-            print(f"Backtest started on backend_services with execution ID: {execution_id}")
-        else:
-            print(f"Failed to start backtest for strategy {strategy.id}")
-            
-    except Exception as e:
-        print(f"Backtest failed for strategy {strategy.id}: {str(e)}")
-
-@router.post("/{strategy_id}/backtest", response_model=dict)
-async def start_backtest(
-    strategy_id: str,
-    backtest_params: BacktestParams,
-    background_tasks: BackgroundTasks,
-    current_user: UserInDB = Depends(get_current_user_from_token),
-    db: Database = Depends(get_db)
-):
-    """Start a backtest for a strategy"""
-    try:
-        strategy_obj_id = PyObjectId(strategy_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid strategy ID format"
-        )
-    
-    # Verify strategy exists and belongs to user
-    strategy = await get_strategy_by_id(db, strategy_obj_id, current_user.id)
-    if not strategy:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Strategy not found"
-        )
-    
-    # Start backtest as background task
-    background_tasks.add_task(run_backtest_task, db, strategy, backtest_params, current_user.id)
-    
-    return {
-        "message": "Backtest started",
-        "strategy_id": strategy_id,
-        "status": "running"
-    }
-
 @router.get("/{strategy_id}/backtest", response_model=List[Backtest])
 async def get_strategy_backtest_results(
     strategy_id: str,

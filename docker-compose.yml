@@ -15,52 +15,27 @@ services:
       - LOCAL_DB=true
       - MONGO_DB_NAME=bot_club_db
       - NODE_ENV=development
-      - BACKEND_SERVICES_URL=http://backend_services:8001
       - SERVICE_NAME=backend
 
     depends_on:
       - mongo
       - redis
-      - backend_services
     restart: unless-stopped
 
-  backend_services:
-    build:
-      context: ./backend_services # Relative to this docker-compose.yml file
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8001"
-    volumes:
-      - ./backend_services:/app 
-    env_file:
-      - ./backend_services/.env  # This loads all environment variables including CONFIG_ENCRYPTION_KEY
-    environment:
-      - MONGO_URL=mongodb://mongo:27017
-      - MONGO_DB=bot_club_db
-      - REDIS_URL=redis://redis:6379/0
-      - LOCAL_DB=true
-      - NODE_ENV=development
-      - SERVICE_PORT=8001
-      - API_SERVICE_URL=http://backend:8000
-      - SERVICE_NAME=backend_services
-
-
-    depends_on:
-      - mongo
-      - redis
-    restart: unless-stopped
 
   # Celery Worker for executing trading tasks
   celery_worker:
     build:
-      context: ./backend_services
+      context: ./backend
       dockerfile: Dockerfile
-    working_dir: /app/src
-    command: celery -A celery_app worker --loglevel=info -Q live_trading,paper_trading,backtesting
+    working_dir: /app
+    # Concurrency 2 to allow control tasks (stop) while a strategy is running
+    # We manage Alpaca connection limits via Redis lock in the task itself
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=2 -Q live_trading,paper_trading,backtesting,control
     volumes:
-      - ./backend_services:/app
+      - ./backend:/app
     env_file:
-      - ./backend_services/.env
+      - ./backend/.env
     environment:
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=bot_club_db
@@ -76,14 +51,14 @@ services:
   # Celery Beat for scheduled tasks
   celery_beat:
     build:
-      context: ./backend_services
+      context: ./backend
       dockerfile: Dockerfile
-    working_dir: /app/src
-    command: celery -A celery_app beat --loglevel=info
+    working_dir: /app
+    command: celery -A src.celery_app beat --loglevel=info
     volumes:
-      - ./backend_services:/app
+      - ./backend:/app
     env_file:
-      - ./backend_services/.env
+      - ./backend/.env
     environment:
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=bot_club_db
@@ -100,16 +75,16 @@ services:
   # Flower for monitoring Celery tasks
   flower:
     build:
-      context: ./backend_services
+      context: ./backend
       dockerfile: Dockerfile
-    working_dir: /app/src
-    command: celery -A celery_app flower --port=5555
+    working_dir: /app
+    command: celery -A src.celery_app flower --port=5555
     ports:
       - "5555:5555"
     volumes:
-      - ./backend_services:/app
+      - ./backend:/app
     env_file:
-      - ./backend_services/.env
+      - ./backend/.env
     environment:
       - MONGO_URL=mongodb://mongo:27017
       - MONGO_DB=bot_club_db
@@ -134,7 +109,6 @@ services:
     environment:
       - NODE_ENV=development
       - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_BACKEND_SERVICES_URL=http://localhost:8001  
     depends_on:
       - backend
     restart: unless-stopped

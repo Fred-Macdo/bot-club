@@ -6,116 +6,89 @@ from typing import List, Dict, Any, Optional
 from pymongo import AsyncMongoClient
 
 from .data_providers import DataProviderFactory, BaseDataProvider, AVAILABLE_CRYPTO_ASSETS, TIMEFRAME_MAPPINGS
-from ..utils.date_utils import DateUtils
 
 logger = logging.getLogger(__name__)
 
 class DataManager:
     """Handles all data fetching and caching using DataProviderFactory"""
     
-    def __init__(self, db: AsyncMongoClient):
-        self.db = db
-        self.data_cache = {}
-        self.data_provider = None
-
-    def __str__(self):
-        return f"DataManager(data_provider={self.data_provider})"
+    def __init__(
+        self,
+        keys: Dict[str, str],
+        provider_name: str = "yahoo"
+    ):
+        self.keys = keys
+        self.data_cache: Dict[str, pl.DataFrame] = {}
+        self.data_provider: Optional[BaseDataProvider] = None
+        self.provider_name = provider_name.lower()
         
-    async def initialize_provider(self, 
-                                  data_provider_name: str, 
-                                  user_id: str,
-                                  ):
-        """Initialize data provider using DataProviderFactory"""
+        # Initialize provider immediately (synchronous)
+        self._initialize_provider(provider_name)
+
+    def _initialize_provider(self, provider_name: str):
+        """Initialize data provider with credentials from keys"""
+        provider_name = provider_name.lower()
+        
         try:
-            # Get user configuration for API keys only
-            user_config = await self.db['user_config'].find_one({"user_id": user_id})
-            
-            if data_provider_name.lower() == 'yahoo':
+            if provider_name == 'yahoo':
                 self.data_provider = DataProviderFactory.get_provider('yahoo')
-                logger.info("Initialized Yahoo Finance data provider")
                 
-            elif data_provider_name.lower() == 'alpaca':
-                if not user_config:
-                    logger.warning(f"No user configuration found for user {user_id}, falling back to Yahoo Finance")
+            elif provider_name == 'alpaca':
+                api_key = self.keys.get("alpaca_paper_api_key") or self.keys.get("alpaca_live_api_key")
+                secret_key = self.keys.get("alpaca_paper_secret_key") or self.keys.get("alpaca_live_secret_key")
+                
+                if not api_key or not secret_key:
+                    logger.warning("Alpaca keys not found, falling back to Yahoo")
                     self.data_provider = DataProviderFactory.get_provider('yahoo')
+                    self.provider_name = 'yahoo'
                     return
                 
-                # Get API keys from user config
-                api_key = user_config.get('alpaca_live_api_key') or user_config.get('alpaca_paper_api_key')
-                secret_key = user_config.get('alpaca_live_secret_key') or user_config.get('alpaca_paper_secret_key')
+                self.data_provider = DataProviderFactory.get_provider(
+                    'alpaca',
+                    api_key=api_key,
+                    secret_key=secret_key
+                )
                 
-                if api_key and secret_key:
-                    # Decrypt secret key if needed
-                    try:
-                        from models.user_config import ConfigEncryption
-                        decrypted_secret = ConfigEncryption.decrypt_value(secret_key)
-                        logger.info(f"DEBUG DATA MANAGER: Decrypted Alpaca secret key: {decrypted_secret}")
-                    except Exception as e:
-                        logger.warning(f"Could not decrypt secret key, using as-is: {e}")
-                        decrypted_secret = secret_key
-                        
-                    self.data_provider = DataProviderFactory.get_provider(
-                        'alpaca',
-                        api_key=api_key,
-                        secret_key=decrypted_secret
-                    )
-                    logger.info("Initialized Alpaca data provider")
-                else:
-                    logger.warning(f"Alpaca API keys not found for user {user_id}, falling back to Yahoo Finance")
+            elif provider_name == 'polygon':
+                api_key = self.keys.get("polygon_secret_key")
+                
+                if not api_key:
+                    logger.warning("Polygon key not found, falling back to Yahoo")
                     self.data_provider = DataProviderFactory.get_provider('yahoo')
-                    
-            elif data_provider_name.lower() == 'polygon':
-                if not user_config:
-                    logger.warning(f"No user configuration found for user {user_id}, falling back to Yahoo Finance")
-                    self.data_provider = DataProviderFactory.get_provider('yahoo')
+                    self.provider_name = 'yahoo'
                     return
                 
-                # Get the actual API key (polygon_secret_key), not the key name
-                api_key = user_config.get('polygon_secret_key')
+                self.data_provider = DataProviderFactory.get_provider('polygon', api_key=api_key)
                 
-                if api_key:
-                    # Decrypt the API key if needed
-                    try:
-                        from models.user_config import ConfigEncryption
-                        decrypted_api_key = ConfigEncryption.decrypt_value(api_key)
-                        logger.info(f"DEBUG DATA MANAGER: Decrypted Polygon API key: {decrypted_api_key}")
-                    except Exception as e:
-                        logger.warning(f"Could not decrypt Polygon API key, using as-is: {e}")
-                        decrypted_api_key = api_key
-                    
-                    self.data_provider = DataProviderFactory.get_provider('polygon', api_key=decrypted_api_key)
-                    logger.info("Initialized Polygon data provider")
-                else:
-                    logger.warning(f"Polygon API key not found for user {user_id}, falling back to Yahoo Finance")
-                    self.data_provider = DataProviderFactory.get_provider('yahoo')
-                    
             else:
-                logger.warning(f"Unknown data provider '{data_provider_name}', falling back to Yahoo Finance")
+                logger.warning(f"Unknown provider '{provider_name}', using Yahoo")
                 self.data_provider = DataProviderFactory.get_provider('yahoo')
+                self.provider_name = 'yahoo'
                 
         except Exception as e:
-            logger.error(f"Error initializing data provider: {e}, falling back to Yahoo Finance")
+            logger.error(f"Error initializing provider: {e}, falling back to Yahoo")
             self.data_provider = DataProviderFactory.get_provider('yahoo')
+            self.provider_name = 'yahoo'
     
-    async def _fetch_alpaca_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+    async def _fetch_alpaca_data(self, symbols: List[str], start_date: datetime, end_date: datetime, timeframe: str) -> List[pl.DataFrame]:
         data = await self.data_provider.get_historical_data(
             symbols=symbols,
-            start_date=start_dt,
-            end_date=end_dt,
+            start_date=start_date,
+            end_date=end_date,
             timeframe=timeframe.strip()
         )
         #logger.info(f"Retrieved data for {symbols}: {data.to_dicts()}")
         #logger.info(f"Retrieved {data.height} data points for {symbols}")
         return [data]
 
-    async def _fetch_yahoo_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+    async def _fetch_yahoo_data(self, symbols: List[str], start_date: datetime, end_date: datetime, timeframe: str) -> List[pl.DataFrame]:
         all_data = []
         for symbol in symbols:
             try:
                 data = await self.data_provider.get_historical_data(
                     symbol=symbol,
-                    start_date=start_dt,
-                    end_date=end_dt,
+                    start_date=start_date,
+                    end_date=end_date,
                     timeframe=timeframe.strip()
                 )
                 
@@ -140,14 +113,14 @@ class DataManager:
                 continue
         return all_data
 
-    async def _fetch_polygon_data(self, symbols: List[str], start_dt: datetime, end_dt: datetime, timeframe: str) -> List[pl.DataFrame]:
+    async def _fetch_polygon_data(self, symbols: List[str], start_date: datetime, end_date: datetime, timeframe: str) -> List[pl.DataFrame]:
         all_data = []
         for symbol in symbols:
             try:
                 data = await self.data_provider.get_historical_data(
                     symbol=symbol,
-                    start_date=start_dt.strftime('%Y-%m-%d'),
-                    end_date=end_dt.strftime('%Y-%m-%d'),
+                    start_date=start_date.strftime('%Y-%m-%d'),
+                    end_date=end_date.strftime('%Y-%m-%d'),
                     timeframe=timeframe.strip()
                 )
                 
@@ -262,7 +235,7 @@ class DataManager:
         """Fetch historical data for symbols using the initialized provider"""
         if not self.data_provider:
             raise ValueError("Data provider not initialized. Call initialize_provider() first.")
-        
+        symbols = [symbol + '/USD' for symbol in symbols if symbol in AVAILABLE_CRYPTO_ASSETS] if self.provider_name == 'alpaca' else symbols
         
         provider_name = self.data_provider.get_provider_name().lower()
         cache_key = f"{'-'.join(symbols)}_{start_date}_{end_date}_{timeframe}_{provider_name}"

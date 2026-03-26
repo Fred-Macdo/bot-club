@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { getTradingStatus, tradingApi, authApi, userApi, strategyApi } from '../api/Client';
 import { getWebSocketUrl } from '../utils/apiConfig';
 
@@ -19,7 +19,7 @@ export const DeployedStrategyProvider = ({ children }) => {
       const saved = localStorage.getItem('deployedStrategy');
       if (saved) {
         const parsed = JSON.parse(saved);
-        console.log('DeployedStrategyContext: Hydrating from localStorage:', parsed);
+        //console.log('DeployedStrategyContext: Hydrating from localStorage:', parsed);
         return parsed;
       }
     } catch (e) {
@@ -44,6 +44,9 @@ export const DeployedStrategyProvider = ({ children }) => {
   const [completedTrades, setCompletedTrades] = useState([]);
   const [positions, setPositions] = useState([]);
   const [metrics, setMetrics] = useState(null);
+  const [portfolio, setPortfolio] = useState(null); // Current portfolio state
+  const [portfolioHistory, setPortfolioHistory] = useState([]); // History of portfolio snapshots
+  const [indicatorData, setIndicatorData] = useState({}); // { symbol: { columns, rows } }
   
   // Track the current task ID for WebSocket connection - also hydrate from localStorage
   const [activeTaskId, setActiveTaskId] = useState(initialState?.activeTaskId || null);
@@ -126,10 +129,48 @@ export const DeployedStrategyProvider = ({ children }) => {
              setMode(mode);
              setDataProvider(provider);
              // Timestamp from session might be ISO string
-             setDeploymentTime(session.timestamp ? new Date(session.timestamp).getTime() : Date.now());
+             setDeploymentTime(session.started_at ? new Date(session.started_at).getTime() : Date.now());
              
-             // Optionally load initial positions/trades if available in response
-             // ...
+             // Load saved portfolio state from session details so UI isn't empty on reconnect
+             try {
+               const sessionDetails = await tradingApi.getSessionDetails(session.strategy_id, userId);
+               if (sessionDetails?.portfolio) {
+                 const pData = sessionDetails.portfolio;
+                 // Restore positions from lots
+                 if (pData.lots && typeof pData.lots === 'object') {
+                   const allLots = [];
+                   for (const [symbol, lots] of Object.entries(pData.lots)) {
+                     if (Array.isArray(lots)) {
+                       lots.forEach(lot => allLots.push({
+                         ...lot,
+                         symbol: lot.symbol || symbol,
+                         quantity: parseFloat(lot.quantity) || 0,
+                         entry_price: parseFloat(lot.entry_price) || 0,
+                         cost_basis: parseFloat(lot.cost_basis) || 0,
+                       }));
+                     }
+                   }
+                   if (allLots.length > 0) setPositions(allLots);
+                 }
+                 // Restore completed trades
+                 if (pData.completed_trades && Array.isArray(pData.completed_trades)) {
+                   setCompletedTrades(pData.completed_trades);
+                 }
+                 // Restore performance metrics
+                 if (pData.performance) {
+                   setMetrics({
+                     totalPnL: parseFloat(pData.performance.total_pnl) || 0,
+                     totalTrades: pData.performance.total_trades || 0,
+                     winningTrades: pData.performance.winning_trades || 0,
+                     losingTrades: pData.performance.losing_trades || 0,
+                     winRate: parseFloat(pData.performance.win_rate) || 0,
+                   });
+                 }
+                 console.log("DeployedStrategyContext: Restored portfolio state from session.");
+               }
+             } catch (portfolioErr) {
+               console.warn("DeployedStrategyContext: Could not restore portfolio from session:", portfolioErr);
+             }
            }
 
         } else {
@@ -218,64 +259,226 @@ export const DeployedStrategyProvider = ({ children }) => {
           try {
             const message = JSON.parse(event.data);
             
-            // If we receive a started status, capture task_id if not already set
-            if (message.type === 'status' && message.data.status === 'started' && message.data.task_id) {
-                 if (!activeTaskId) {
-                     console.log("DeployedStrategyContext: Captured task_id from stream:", message.data.task_id);
-                     setActiveTaskId(message.data.task_id);
-                 }
-            }
+            // Messages arrive as { id, type, data: { event_type, ... } }
+            // The actual payload is in message.data, and event_type is inside the payload
+            const outerType = message.type;
+            const payload = message.data || message;
+            const eventType = payload.event_type || outerType;
+            
+            // Skip non-data messages
+            if (outerType === 'heartbeat' || outerType === 'connection') return;
+            
+            switch (eventType) {
+              // --- Log-type events (display in TradingLogs via LogRenderer) ---
+              case 'log':
+              case 'trading_log':
+                setLogs(prev => [...prev.slice(-499), payload]);
+                break;
+                
+              case 'positions':
+                // Add to logs for LogRenderer display
+                setLogs(prev => [...prev.slice(-499), payload]);
+                // Also extract structured positions data for Positions component
+                if (payload.data && payload.data.positions && Array.isArray(payload.data.positions)) {
+                  setPositions(payload.data.positions);
+                }
+                break;
+                
+              case 'account_value':
+                // Add to logs for LogRenderer display
+                setLogs(prev => [...prev.slice(-499), payload]);
+                // Also extract structured account value for metrics and equity chart
+                if (payload.data && payload.data.account_value !== undefined) {
+                  const acctVal = parseFloat(payload.data.account_value) || 0;
+                  const cashVal = parseFloat(payload.data.cash) || 0;
+                  setMetrics(prev => ({
+                    ...(prev || {}),
+                    accountValue: acctVal,
+                  }));
+                  // Add equity data point for charting
+                  setPortfolioHistory(prev => [...prev.slice(-299), {
+                    timestamp: payload.timestamp || Date.now(),
+                    total_value: acctVal,
+                    cash: cashVal,
+                    unrealized_pnl: 0,
+                    realized_pnl: 0,
+                  }]);
+                }
+                break;
 
-            if (message.type === 'status') {
-              setSocketStatus(message.data.status);
+              case 'portfolio_snapshot':
+                // Add to logs for PortfolioSnapshotLog renderer
+                setLogs(prev => [...prev.slice(-499), payload]);
+                // Also extract portfolio data to populate state
+                if (payload.data) {
+                  const pData = payload.data;
+                  // Extract positions from lots (dict of symbol -> lots[])
+                  if (pData.lots && typeof pData.lots === 'object') {
+                    const allLots = [];
+                    for (const [symbol, lots] of Object.entries(pData.lots)) {
+                      if (Array.isArray(lots)) {
+                        lots.forEach(lot => allLots.push({
+                          ...lot,
+                          symbol: lot.symbol || symbol,
+                          quantity: parseFloat(lot.quantity) || 0,
+                          entry_price: parseFloat(lot.entry_price) || 0,
+                          cost_basis: parseFloat(lot.cost_basis) || 0,
+                        }));
+                      }
+                    }
+                    if (allLots.length > 0) {
+                      setPositions(allLots);
+                    }
+                  }
+                  // Extract performance metrics
+                  if (pData.performance) {
+                    setMetrics(prev => ({
+                      ...(prev || {}),
+                      totalPnL: parseFloat(pData.performance.total_pnl) || 0,
+                      totalTrades: pData.performance.total_trades || 0,
+                      winningTrades: pData.performance.winning_trades || 0,
+                      losingTrades: pData.performance.losing_trades || 0,
+                      winRate: parseFloat(pData.performance.win_rate) || 0,
+                    }));
+                  }
+                }
+                break;
+
+              case 'price_dataframe':
+              case 'exit_conditions':
+                // These are display-only log events rendered by LogRenderer
+                setLogs(prev => [...prev.slice(-499), payload]);
+                break;
+                
+              // --- Portfolio update from persistence layer ---
+              case 'portfolio_update':
+              case 'portfolio_update_event':
+                setPortfolio(payload);
+                
+                // Extract positions from lots
+                if (payload.lots && Array.isArray(payload.lots)) {
+                  setPositions(payload.lots);
+                }
+                
+                // Extract completed trades
+                if (payload.completed_trades && Array.isArray(payload.completed_trades)) {
+                  setCompletedTrades(payload.completed_trades);
+                }
+                
+                // Extract performance metrics
+                if (payload.performance) {
+                  setMetrics({
+                    totalPnL: parseFloat(payload.performance.total_pnl) || 0,
+                    unrealizedPnL: parseFloat(payload.performance.unrealized_pnl) || 0,
+                    totalTrades: payload.performance.total_trades || 0,
+                    winningTrades: payload.performance.winning_trades || 0,
+                    losingTrades: payload.performance.losing_trades || 0,
+                    winRate: parseFloat(payload.performance.win_rate) || 0,
+                    accountValue: parseFloat(payload.total_value || payload.current_cash) || 0,
+                    totalReturnPct: parseFloat(payload.performance.total_return_pct) || 0,
+                  });
+                }
+                
+                // Add to portfolio history for charting
+                setPortfolioHistory(prev => [...prev.slice(-299), {
+                  timestamp: payload.timestamp || Date.now(),
+                  unrealized_pnl: parseFloat(payload.performance?.unrealized_pnl) || 0,
+                  realized_pnl: parseFloat(payload.performance?.total_pnl) || 0,
+                  total_value: parseFloat(payload.total_value || payload.current_cash) || 0,
+                }]);
+                break;
               
-              // Automatically stop deployment state if backend signals stop
-              if (message.data.status === 'stopped' || message.data.status === 'failed') {
-                  console.log(`Received ${message.data.status} signal from backend. Stopping strategy session.`);
-                  setIsDeployed(false);
-                  isDeployedRef.current = false;
-                  setActiveTaskId(null);
-                  localStorage.removeItem('deployedStrategy');
-              }
-            } else if (message.type === 'log') {
-              setLogs((prev) => [message.data, ...prev].slice(0, 200));
-            } else if (message.type === 'trade') {
-              setTrades((prev) => [message.data, ...prev]);
-            } else if (message.type === 'completed_trade') {
-              setCompletedTrades((prev) => [message.data, ...prev]);
-            } else if (message.type === 'position') {
-              setPositions(message.data.positions || []);
-            } else if (message.type === 'portfolio_update') {
-              console.log("Received portfolio_update message:", message.data);
-               // Handle enriched portfolio update which contains lots
-               const portfolio = message.data;
-               let allLots = [];
-               
-               if (portfolio.lots) {
-                   // Flatten the dictionary of lists: { "SYM": [lot1], ... } -> [lot1, ...]
-                   Object.values(portfolio.lots).forEach(lotList => {
-                       if (Array.isArray(lotList)) {
-                           allLots.push(...lotList);
-                       }
-                   });
-               }
-               
-               // Ensure each lot has an id for DataGrid
-               const gridRows = allLots.map(lot => ({
-                   ...lot,
-                   id: lot.lot_id // Map lot_id to id for DataGrid
-               }));
-               
-               setPositions(gridRows);
-               
-               if (portfolio.performance) {
-                   setMetrics(portfolio.performance);
-               }
-            } else if (message.type === 'metrics') {
-              setMetrics(message.data);
+              // --- Position opened from persistence layer ---
+              case 'position_opened':
+                if (payload.lot) {
+                  setPositions(prev => {
+                    const exists = prev.some(p => p.lot_id === payload.lot.lot_id);
+                    if (exists) return prev;
+                    return [...prev, payload.lot];
+                  });
+                }
+                // Also add as a log entry
+                setLogs(prev => [...prev.slice(-499), {
+                  event_type: 'log',
+                  level: 'INFO',
+                  message: `Position opened: ${payload.lot?.symbol || 'unknown'} qty=${payload.lot?.quantity || 0}`,
+                  timestamp: payload.timestamp || Date.now()
+                }]);
+                break;
+                
+              // --- Trade completed from persistence layer ---
+              case 'trade_completed':
+              case 'trade_update':
+                if (payload.trade) {
+                  setCompletedTrades(prev => {
+                    const exists = prev.some(t => 
+                      t.trade_id === payload.trade.trade_id || 
+                      t.lot_id === payload.trade.lot_id
+                    );
+                    if (exists) return prev;
+                    return [...prev, payload.trade];
+                  });
+                  // Remove the closed lot from positions
+                  if (payload.trade.lot_id) {
+                    setPositions(prev => prev.filter(p => p.lot_id !== payload.trade.lot_id));
+                  }
+                }
+                break;
+              
+              // --- Equity curve update from persistence layer ---
+              case 'equity_update':
+                setPortfolioHistory(prev => [...prev.slice(-299), {
+                  timestamp: payload.timestamp || Date.now(),
+                  total_value: parseFloat(payload.total_value) || 0,
+                  cash: parseFloat(payload.cash) || 0,
+                  positions_value: parseFloat(payload.positions_value) || 0,
+                  unrealized_pnl: 0,
+                  realized_pnl: 0,
+                }]);
+                break;
+                
+              case 'position_update':
+                if (payload.positions) {
+                  setPositions(payload.positions);
+                }
+                break;
+                
+              case 'metrics_update':
+                if (payload.metrics) {
+                  setMetrics(prev => ({ ...prev, ...payload.metrics }));
+                }
+                break;
+                
+              case 'indicator_values':
+                // Structured indicator time-series for charting
+                if (payload.symbol && payload.columns && payload.rows) {
+                  setIndicatorData(prev => ({
+                    ...prev,
+                    [payload.symbol]: {
+                      columns: payload.columns,
+                      rows: payload.rows,
+                      timestamp: payload.timestamp || Date.now(),
+                    }
+                  }));
+                }
+                break;
+
+              case 'status':
+                // Task status events (started, completed, error)
+                console.log('Task status:', payload);
+                break;
+                
+              default:
+                console.log('Unhandled event type:', eventType, payload);
+                setLogs(prev => [...prev.slice(-499), { 
+                  event_type: 'log',
+                  level: 'DEBUG', 
+                  message: JSON.stringify(payload),
+                  timestamp: new Date().toISOString()
+                }]);
             }
-          } catch (e) {
-            console.error('Socket parse error:', e);
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error);
           }
         };
 
@@ -338,6 +541,8 @@ export const DeployedStrategyProvider = ({ children }) => {
     setCompletedTrades([]);
     setPositions([]);
     setMetrics(null);
+    setPortfolio(null);
+    setPortfolioHistory([]);
     
     setDeployedStrategy(strategy);
     setIsDeployed(true);
@@ -362,6 +567,8 @@ export const DeployedStrategyProvider = ({ children }) => {
       setCompletedTrades([]);
       setPositions([]);
       setMetrics(null);
+      setPortfolio(null);
+      setPortfolioHistory([]);
       
       setDeployedStrategy(strategy);
       setIsDeployed(true);
@@ -410,7 +617,10 @@ export const DeployedStrategyProvider = ({ children }) => {
     trades,
     completedTrades,
     positions,
-    metrics
+    metrics,
+    portfolio,
+    portfolioHistory,
+    indicatorData,  // Indicator time-series for charting
   };
 
   return (

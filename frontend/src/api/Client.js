@@ -301,7 +301,7 @@ export const backtestApi = {
         backtestData.strategy_type = 'user'; // Default to user if check fails
       }
     }
-
+    console.log("Final backtest data being sent:", backtestData);
     return apiClient.post('/api/backtest/run', backtestData);
   },
 
@@ -364,24 +364,15 @@ export const tradingApi = {
   },
 
   async getActiveSessions(userId) {
-    const url = `${apiClient.backendServicesURL}/trading/active?user_id=${userId}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Failed to get active sessions: ${response.status} ${response.statusText}`);
-    }
-    return await response.json();
+    return apiClient.get(`/api/trading/active?user_id=${userId}`);
   },
 
   async getSessionDetails(strategyId, userId) {
-    let url = `${apiClient.backendServicesURL}/trading/session/${strategyId}`;
+    let url = `/api/trading/session/${strategyId}`;
     if (userId) {
       url += `?user_id=${userId}`;
     }
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Failed to get session details: ${response.status} ${response.statusText}`);
-    }
-    return await response.json();
+    return apiClient.get(url);
   }
 };
 
@@ -423,12 +414,13 @@ export const fetchDefaultStrategies = async () => {
   }
 };
 
-export const deployStrategy = async (strategyId, mode, dataProvider) => {
+export const deployStrategy = async (strategyId, mode, dataProvider, initialCapital = 100000) => {
   try {
     const payload = {
       strategy_id: strategyId,
       mode: mode,
       data_provider: dataProvider,
+      initial_capital: initialCapital,
     };
     console.log('deployStrategy payload:', payload);
     const response = await apiClient.post('/api/trading/run', payload);

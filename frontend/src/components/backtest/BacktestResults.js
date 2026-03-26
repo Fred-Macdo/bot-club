@@ -129,8 +129,8 @@ const Row = ({ row, strategy }) => {
     };
   }, [backtest.backtest_id, backtest.equity_curve, theme]);
 
-  // Use metrics from the new data structure
-  const metrics = backtest.metrics || {};
+  // Use stats from the MongoDB document (backend saves under "stats")
+  const metrics = backtest.stats || backtest.metrics || {};
 
   return (
     <React.Fragment>

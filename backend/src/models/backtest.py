@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import uuid
 
 from typing import List, Optional, Dict, Any
@@ -87,8 +87,8 @@ class Backtest(BaseModel):
     
     # Metadata
     status: str = Field(default="completed", description="Backtest status")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
     class Config:
         validate_by_name = True
@@ -131,17 +131,6 @@ class BacktestSummary(BaseModel):
     class Config:
         validate_by_name = True
 
-class BacktestRequest(BaseModel):
-    """
-    Defines the shape of a request from the frontend to start a backtest.
-    """
-    strategy_id: str
-    initial_capital: float
-    timeframe: str
-    start_date: date
-    end_date: date
-    data_provider: str
-
 class BacktestExecution(BaseModel):
     """Tracks backtest execution state (stored in both MongoDB and Redis)"""
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
@@ -150,7 +139,7 @@ class BacktestExecution(BaseModel):
     status: str = Field(default="pending", description="Status: pending, running, completed, failed")
     progress: int = Field(default=0, description="Progress percentage (0-100)")
     error_message: Optional[str] = Field(None, description="Error message if failed")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     started_at: Optional[datetime] = Field(None, description="When backtest started")
     completed_at: Optional[datetime] = Field(None, description="When backtest completed")
     

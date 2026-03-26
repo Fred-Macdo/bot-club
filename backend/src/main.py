@@ -1,4 +1,7 @@
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pydantic")
+
 from dotenv import load_dotenv
 import os
 from pathlib import Path

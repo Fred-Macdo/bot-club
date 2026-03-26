@@ -2,14 +2,14 @@ import redis
 import json
 import logging
 import os
-import time # Import time for timestamping
+import time
+from datetime import datetime, timezone
 from ..celery_app import celery_app
-#from ..config import REDIS_URL, MONGO_URL, MONGO_DB_NAME
-from ..services.trading.crypto_strategy import CryptoStrategy
-from ..services.trading.stock_strategy import StockStrategy
-from ..services.data_retrieval.data_providers import AVAILABLE_CRYPTO_ASSETS
+from ..services.data_retrieval.data_providers import AVAILABLE_CRYPTO_ASSETS, AlpacaProvider
+from ..services.trading.alpaca_client import AlpacaTradingClient
+from ..services.trading.live_strategy_runner import LiveStrategyRunner
 from ..models.user_config import ConfigEncryption
-from lumibot.brokers import Alpaca
+from ..models.trading_session import TradingSession, TradingSessionStatus, TradingSessionConfig
 from pymongo import MongoClient
 from bson import ObjectId
 
@@ -37,7 +37,8 @@ def run_live_strategy(self, trading_request, current_user):
     """
     strategy_id = trading_request['strategy_id']
     mode = trading_request['mode']
-    data_provider = trading_request['data_provider']
+    data_provider = trading_request['data_provider'].lower()
+    initial_capital = trading_request.get('initial_capital', 100000.0)
     user_id = str(current_user['id'])
     task_id = self.request.id
     # Use task ID for the stream key
@@ -95,6 +96,8 @@ def run_live_strategy(self, trading_request, current_user):
 
     logger.info(f"Worker started for task {task_id}, publishing to {stream_key}")
     
+    session_id = None
+    db_client_conn = None
     try:
         # Publish task started event
         publish_to_stream(redis_client, stream_key, "status", 
@@ -102,31 +105,15 @@ def run_live_strategy(self, trading_request, current_user):
         logger.info(f"Published start message to {stream_key}")
         
         # Create sync MongoDB connection
-        logger.info(f"DEBUG: Connecting to Mongo at {MONGO_URL} (DB: {MONGO_DB_NAME})")
-        db_client = MongoClient(MONGO_URL)
-        db = db_client[MONGO_DB_NAME]
-        
-        # DEBUG: List collections and IDs
-        try:
-            col_names = db.list_collection_names()
-            logger.info(f"DEBUG: Available collections: {col_names}")
-            
-            # Log IDs in strategy collection
-            strategies = list(db.strategy.find({}, {"_id": 1}))
-            logger.info(f"DEBUG: All User Strategy IDs: {[str(s['_id']) for s in strategies]}")
-
-            # Log IDs in default_strategies collection
-            defaults = list(db.default_strategies.find({}, {"_id": 1}))
-            logger.info(f"DEBUG: All Default Strategy IDs: {[str(s['_id']) for s in defaults]}")
-        except Exception as e:
-            logger.error(f"DEBUG: Error listing collections: {e}")
+        logger.info(f"Connecting to Mongo at {MONGO_URL} (DB: {MONGO_DB_NAME})")
+        db_client_conn = MongoClient(MONGO_URL)
+        db = db_client_conn[MONGO_DB_NAME]
 
         # Fetch Strategy Config
         strategy_doc = db.strategy.find_one({"_id": ObjectId(strategy_id)})
         logger.info(f"Looking for strategy {strategy_id} in 'strategy': {strategy_doc is not None}")
         
         if not strategy_doc:
-             # Try default strategies if not found in user strategies
              strategy_doc = db.default_strategies.find_one({"_id": ObjectId(strategy_id)})
              logger.info(f"Looking for strategy {strategy_id} in 'default_strategies': {strategy_doc is not None}")
         
@@ -137,79 +124,129 @@ def run_live_strategy(self, trading_request, current_user):
         # Fetch User Config for API Keys
         user_config_doc = db.user_config.find_one({"user_id": user_id})
         if not user_config_doc:
-             # Fallback or error? For now, error.
-             # In a real app, you might want to handle this gracefully or use env vars.
              logger.warning(f"User config not found for user {user_id}. Using empty config.")
              user_config_doc = {}
-        logger.info(f"Fetched user config for trading. {user_config_doc}")
-        # Construct Alpaca Config
+
+        # Construct Alpaca credentials
         if mode == 'paper':
              logger.info(f"Using paper trading config for user {user_id}")
-             alpaca_config = {
-                 "API_KEY": user_config_doc.get('alpaca_paper_api_key'),
-                 "API_SECRET": ConfigEncryption.decrypt_value(user_config_doc.get('alpaca_paper_secret_key')),
-                 "PAPER": True
-             }
+             api_key = user_config_doc.get('alpaca_paper_api_key')
+             secret_key = ConfigEncryption.decrypt_value(user_config_doc.get('alpaca_paper_secret_key'))
+             is_paper = True
         else:
              logger.info(f"Using live trading config for user {user_id}")
-             alpaca_config = {
-                 "API_KEY": user_config_doc.get('alpaca_live_api_key'),
-                 "API_SECRET": ConfigEncryption.decrypt_value(user_config_doc.get('alpaca_live_secret_key')),
-                 "PAPER": False
-             }
-        logger.info(f"Alpaca config {alpaca_config}")
-        # Create broker
-        broker = Alpaca(config=alpaca_config)
+             api_key = user_config_doc.get('alpaca_live_api_key')
+             secret_key = ConfigEncryption.decrypt_value(user_config_doc.get('alpaca_live_secret_key'))
+             is_paper = False
+
+        if not api_key or not secret_key:
+            raise ValueError("Alpaca API credentials not configured. Please set them in your account settings.")
+
+        # Create Alpaca clients
+        alpaca_trading = AlpacaTradingClient(
+            api_key=api_key,
+            secret_key=secret_key,
+            paper=is_paper,
+        )
+        alpaca_data = AlpacaProvider(
+            api_key=api_key,
+            secret_key=secret_key,
+        )
         
         # Determine if crypto or stock
         symbols = strategy_config.get('config', {}).get('symbols', [])
-        logger.info(f"DEBUG Trading Tasks: Strategy symbols: {symbols}")
+        logger.info(f"Strategy symbols: {symbols}")
         is_crypto = any(symbol in AVAILABLE_CRYPTO_ASSETS for symbol in symbols)
         
+        # Create or resume TradingSession
+        strategy_name = strategy_config.get('name', 'Unnamed Strategy')
+        timeframe = strategy_config.get('config', {}).get('timeframe', '15M')
+
+        session = TradingSession(
+            strategy_id=strategy_id,
+            strategy_name=strategy_name,
+            user_id=user_id,
+            task_id=task_id,
+            config=TradingSessionConfig(
+                mode=mode,
+                data_provider=data_provider,
+                initial_capital=initial_capital,
+                timeframe=timeframe,
+                symbols=symbols,
+            ),
+            status=TradingSessionStatus.ACTIVE,
+            started_at=datetime.now(tz=timezone.utc),
+        )
+        session_id = session.session_id
+
+        # Upsert session (replace any previous session for this strategy+user)
+        db.trading_sessions.update_one(
+            {"strategy_id": strategy_id, "user_id": user_id},
+            {"$set": session.model_dump(mode='json')},
+            upsert=True,
+        )
+        logger.info(f"Trading session created: {session_id}")
+
         # Define stream publisher callback
         def stream_publisher(event_type, data):
             publish_to_stream(redis_client, stream_key, event_type, data)
 
-        if is_crypto:
-            strategy = CryptoStrategy(
-                broker=broker,
-                strategy_config=strategy_config,
-                event_queue=None, 
-                strategy_id=strategy_id,
-                db=db,
-                user_id=user_id,
-                stream_publisher=stream_publisher
-            )
-        else:
-            strategy = StockStrategy(
-                broker=broker,
-                strategy_config=strategy_config,
-                event_queue=None,
-                strategy_id=strategy_id,
-                db=db,
-                user_id=user_id,
-                stream_publisher=stream_publisher
-            )
+        # Create the unified strategy runner
+        runner = LiveStrategyRunner(
+            alpaca_client=alpaca_trading,
+            data_provider=alpaca_data,
+            strategy_config=strategy_config,
+            strategy_id=strategy_id,
+            user_id=user_id,
+            db=db,
+            stream_publisher=stream_publisher,
+            initial_capital=initial_capital,
+            session_id=session_id,
+            is_crypto=is_crypto,
+        )
+
+        # Run the strategy (blocking loop — exits when stopped or error)
+        runner.run()
         
-        # Note: The original RedisLogHandler needs modification to use xadd instead of publish.
-        # For this example, we proceed assuming logging mechanisms are adapted or deferred.
-        
-        # Run the strategy (blocking call)
-        strategy.run_live()
-        
-        return {"status": "completed", "strategy_id": strategy_id}
+        # Mark session completed
+        db.trading_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "status": TradingSessionStatus.COMPLETED,
+                "stopped_at": datetime.now(tz=timezone.utc),
+                "updated_at": datetime.now(tz=timezone.utc),
+            }},
+        )
+
+        return {"status": "completed", "strategy_id": strategy_id, "session_id": session_id}
         
     except Exception as e:
         logger.error(f"Error in strategy task: {e}", exc_info=True)
-        # Publish error event
         publish_to_stream(redis_client, stream_key, "error", {"message": str(e)})
-        raise  # Re-raise so Celery marks task as failed
+
+        # Mark session as error
+        if session_id:
+            try:
+                db = db_client_conn[MONGO_DB_NAME] if db_client_conn else None
+                if db:
+                    db.trading_sessions.update_one(
+                        {"session_id": session_id},
+                        {"$set": {
+                            "status": TradingSessionStatus.ERROR,
+                            "error_message": str(e),
+                            "stopped_at": datetime.now(tz=timezone.utc),
+                            "updated_at": datetime.now(tz=timezone.utc),
+                        }},
+                    )
+            except Exception:
+                pass
+
+        raise
     finally:
         # ---------------------------------------------------------
         # RELEASE LOCK
         # ---------------------------------------------------------
         try:
-            # Check if we still hold the lock before deleting
             current_holder = redis_client.get(lock_key)
             if current_holder and current_holder.decode('utf-8') == task_id:
                 redis_client.delete(lock_key)
@@ -222,17 +259,20 @@ def run_live_strategy(self, trading_request, current_user):
         logger.info(f"Worker stopped for task {task_id}")
         redis_client.close()
 
+        if db_client_conn:
+            db_client_conn.close()
+
 @celery_app.task(bind=True)
 def stop_live_strategy(self, task_id):
     """
     Stops a running live trading strategy by revoking the Celery task.
     Uses SIGKILL to ensure immediate termination if SIGTERM is ignored.
     Manually releases the Redis lock since SIGKILL prevents the worker's finally block from running.
+    Also marks the TradingSession as stopped in MongoDB.
     """
     logger.info(f"Received request to stop task {task_id}")
     
     redis_client = None
-    # Manually release the lock if it belongs to this task
     try:
         redis_client = redis.from_url(REDIS_URL)
         
@@ -253,7 +293,25 @@ def stop_live_strategy(self, task_id):
                 logger.warning(f"Lock held by {current_holder_str}, not {task_id}. Not removing.")
         else:
             logger.info("No lock found to release.")
-            
+
+        # Mark session as stopped in MongoDB
+        try:
+            db_client_conn = MongoClient(MONGO_URL)
+            db = db_client_conn[MONGO_DB_NAME]
+            result = db.trading_sessions.update_one(
+                {"task_id": task_id},
+                {"$set": {
+                    "status": TradingSessionStatus.STOPPED,
+                    "stopped_at": datetime.now(tz=timezone.utc),
+                    "updated_at": datetime.now(tz=timezone.utc),
+                }},
+            )
+            if result.modified_count:
+                logger.info(f"Marked trading session as stopped for task {task_id}")
+            db_client_conn.close()
+        except Exception as db_e:
+            logger.error(f"Error updating session on stop: {db_e}")
+
     except Exception as e:
         logger.error(f"Error cleaning up lock/stream during stop: {e}")
     finally:

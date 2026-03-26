@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pydantic")
+
 from celery import Celery
 from .config import REDIS_URL
 
@@ -5,14 +8,17 @@ celery_app = Celery(
     "bot_club_tasks",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["src.tasks.trading_tasks"]
+    include=[
+        "src.tasks.trading_tasks",
+        "src.tasks.backtest_task"
+    ]
 )
 
 # Configure specialized queues
 celery_app.conf.task_routes = {
     'src.tasks.trading_tasks.run_live_strategy': {'queue': 'live_trading'},
     'src.tasks.trading_tasks.run_paper_strategy': {'queue': 'paper_trading'},
-    'src.tasks.trading_tasks.run_backtest_task': {'queue': 'backtesting'},
+    'src.tasks.backtest_task.run_backtest_task': {'queue': 'backtesting'},
     'src.tasks.trading_tasks.stop_live_strategy': {'queue': 'control'}
 }
 

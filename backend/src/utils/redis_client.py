@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Try to import redis, fall back to mock if not available
 try:
@@ -109,7 +109,7 @@ class RedisClient:
         data = {
             "status": status,
             "progress": progress,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(tz=timezone.utc).isoformat(),
             **kwargs
         }
         await self.redis.hset(key, mapping={k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in data.items()})
@@ -135,7 +135,7 @@ class RedisClient:
     async def add_backtest_log(self, backtest_id: str, message: str):
         """Add log message to backtest"""
         key = f"backtest:{backtest_id}:logs"
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(tz=timezone.utc).isoformat()
         log_entry = f"[{timestamp}] {message}"
         await self.redis.lpush(key, log_entry)
         # Keep only last 100 logs

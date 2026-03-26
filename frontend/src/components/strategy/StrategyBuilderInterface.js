@@ -54,8 +54,6 @@ const StrategyBuilderInterface = () => {
   const [strategyConfig, setStrategyConfig] = useState({
     symbols: ["AAPL", "MSFT", "GOOG"],
     timeframe: "1d",
-    start_date: "2024-01-01",
-    end_date: "2024-12-31",
     entry_conditions: [
       {
         indicator: "ema_5",
@@ -293,8 +291,6 @@ description: "${strategyDescription}"
 config:
   symbols: [${strategyConfig.symbols.map(s => `"${s}"`).join(', ')}]
   timeframe: "${strategyConfig.timeframe}"
-  start_date: "${strategyConfig.start_date}"
-  end_date: "${strategyConfig.end_date}"
   
   entry_conditions:
 ${strategyConfig.entry_conditions.map(formatCondition).join('\n')}
@@ -463,8 +459,10 @@ ${strategyConfig.indicators.map(indicator =>
       // name, description, config (StrategyConfig)
       
       // Prepare the config object matching StrategyConfig Pydantic model
+      // Remove dates from config - they belong to backtest params, not strategy definition
+      const { start_date, end_date, ...configWithoutDates } = strategyConfig;
       const configPayload = {
-        ...strategyConfig,
+        ...configWithoutDates,
         // Map frontend 'dollar_cost_averaging' to backend 'dollar_cost_average'
         dollar_cost_average: {
           enabled: strategyConfig.dollar_cost_averaging.enabled,

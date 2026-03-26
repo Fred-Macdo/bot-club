@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Union, Dict, Any
 from bson import ObjectId
 from pymongo.database import Database
@@ -46,8 +46,8 @@ async def create_backtest(
         backtest_data["strategy_id"] = PyObjectId(strategy_id)
     
     backtest_data["user_id"] = user_id
-    backtest_data["created_at"] = datetime.utcnow()
-    backtest_data["updated_at"] = datetime.utcnow()
+    backtest_data["created_at"] = datetime.now(tz=timezone.utc)
+    backtest_data["updated_at"] = datetime.now(tz=timezone.utc)
     
     try:
         backtest = Backtest(**backtest_data)
@@ -226,7 +226,7 @@ async def update_backtest(
         user_id = PyObjectId(user_id)
     
     try:
-        update_data["updated_at"] = datetime.utcnow()
+        update_data["updated_at"] = datetime.now(tz=timezone.utc)
         
         result = await run_db_operation(backtest_collection.update_one,
             {"_id": backtest_id, "user_id": user_id},
@@ -305,7 +305,7 @@ async def update_backtest_execution(
     """Update backtest execution record"""
     collection = db["backtest_executions"]
     
-    update_data["updated_at"] = datetime.utcnow()
+    update_data["updated_at"] = datetime.now(tz=timezone.utc)
     
     result = await run_db_operation(collection.update_one,
         {"_id": ObjectId(backtest_id)},

@@ -14,10 +14,12 @@ from ...utils.indicator_factory import IndicatorFactory
 from ...utils.condition_checker import ConditionChecker
 from ...utils.indicator_converter import IndicatorConverter
 from ...utils.trade_logger import TradeLogger
+from ...utils.enums import LogEventType
 from ...models.portfolio_models import *
 from decimal import Decimal
 import json
 logger = logging.getLogger(__name__)
+from ...utils.portfolio_persistence import PortfolioPersistence
 
 class StockStrategy(Strategy):
     """
@@ -30,7 +32,8 @@ class StockStrategy(Strategy):
                    strategy_id=None, 
                    db=None,
                    user_id=None,
-                   stream_publisher=None):
+                   stream_publisher=None,
+                   initial_capital=100000.0):
         
         self.indicator_converter = IndicatorConverter()
         self.strategy = strategy_config.get("config")
@@ -42,10 +45,15 @@ class StockStrategy(Strategy):
         self.exit_conditions = self.strategy.get('exit_conditions', [])
         self.risk_management = self.strategy.get('risk_management', {})
         self.set_market("NYSE") # Set to standard stock market hours
+        account_value = self.get_cash()
+        effective_capital = max(float(initial_capital), float(account_value))
+        logger.info(f"Initial capital: user_defined={initial_capital}, account_value={account_value}, effective={effective_capital}")
         self.portfolio = StrategyPortfolio(strategy_id=strategy_config.get("_id"),
                                            strategy_name=strategy_config.get("name", "Unnamed Strategy"),
-                                           user_id=strategy_config.get("user_id"))
-        self.portfolio.set_initial_capital(self.get_cash())
+                                           user_id=strategy_config.get("user_id"),
+                                           initial_capital=effective_capital,
+                                           current_cash=account_value,
+                                           performance=PerformanceMetrics())
         self.condition_checker = ConditionChecker()
 
         # Store event queue and strategy_id for emitting events
@@ -55,39 +63,74 @@ class StockStrategy(Strategy):
         self.db = db
         self.user_id = user_id
         self.trade_counter = 0
-        self.strategy_id = strategy_id
-        self.trade_counter = 0
+        
+        # Initialize persistence layer
+        self.persistence = PortfolioPersistence(
+            db=db,
+            stream_publisher=stream_publisher,
+            strategy_id=strategy_id,
+            user_id=user_id
+        )
     
-    def log_message(self, message, level='info', color=None, broadcast=True):
+    def log_message(self, message, level='info', color=None, broadcast=True, event_type=LogEventType.LOG):
         # Lumibot's Strategy.log_message does not accept 'broadcast'
         super().log_message(message, level, color)
         
         if hasattr(self, 'stream_publisher') and self.stream_publisher and broadcast:
-             self.stream_publisher("log", {
+             payload = {
+                "event_type": event_type,
                 "timestamp": datetime.now().timestamp() * 1000, 
                 "level": str(level).upper(), 
                 "message": str(message)
-            })
+             }
+             
+             # Attempt to parse message if it looks like a JSON object (for rich data)
+             if isinstance(message, str) and message.strip().startswith('{'):
+                 try:
+                     data = json.loads(message)
+                     if isinstance(data, dict):
+                         payload['data'] = data
+                         if 'title' in data:
+                             payload['message'] = data['title']
+                 except:
+                     pass
+
+             self.stream_publisher("log", payload)
 
     def on_trading_iteration(self):
         self.log_message(f"Strategy: {self.strategy}")
         self.log_message(f"Symbols: {self.symbols}")
-        # ... (rest of the initial logging is the same) ...
 
-        # Get the cash balance, positions, and portfolio value
         cash = self.get_cash()
         positions = self.get_positions()
         self.log_message(f"Date: {self.get_datetime()}")
         self.log_message(f"Cash Balance: {cash:.2f}")
-        self.log_message(f"Current Positions: {positions}")
-        self.log_message(f"Account Value: {self.get_portfolio_value():.2f}")
 
-        # 1. Get the assets
+        # Send structured positions data for frontend components
+        positions_data = []
+        for pos in positions:
+            pos_data = {
+                "symbol": pos.asset.symbol if hasattr(pos, 'asset') and hasattr(pos.asset, 'symbol') else str(pos),
+                "quantity": float(pos.quantity) if hasattr(pos, 'quantity') else 0,
+            }
+            positions_data.append(pos_data)
+        self.log_message(
+            json.dumps({"title": f"Current Positions ({len(positions)} open)", "positions": positions_data}),
+            event_type=LogEventType.POSITIONS
+        )
+
+        # Send structured account value data for frontend components
+        acct_value = self.get_portfolio_value()
+        self.log_message(
+            json.dumps({"title": f"Account Value: ${acct_value:.2f}", "account_value": float(acct_value), "cash": float(cash)}),
+            event_type=LogEventType.ACCOUNT_VALUE
+        )
+
+        # Track latest prices for all assets
+        latest_prices = {}
         
-        # Define assets as stocks
         assets = [Asset(x, asset_type=Asset.AssetType.STOCK) for x in self.symbols]
         for asset in assets: 
-            # 3. Get data for each symbol
             prices = self.get_historical_prices(asset, 50, self.timeframe)
            
             if prices is None or prices.df.empty:
@@ -98,7 +141,6 @@ class StockStrategy(Strategy):
             position = self.get_position(asset)
             prices_df = pl.from_pandas(prices.df)
             
-            # 4. Calculate the indicators for each asset
             technicals = IndicatorFactory(prices_df, self.params)
             df = technicals.calculate_indicators()
 
@@ -108,16 +150,13 @@ class StockStrategy(Strategy):
             else:
                 self.log_message(f"Indicators calculated for {asset.symbol}")
                 
-                # Logging remains the same...
                 n_rows = 2
                 df_to_log = (
                     df.tail(n_rows)
                       .with_columns(pl.col(pl.Float64).round(4))
                       .to_pandas()
                 )
-                indicator_table = df_to_log.to_string(index=False)
-
-                # JSON payload for frontend...
+                
                 df_json_string = df_to_log.to_json(orient="records")
                 df_data = json.loads(df_json_string)
                 log_payload = {
@@ -128,15 +167,14 @@ class StockStrategy(Strategy):
                 self.log_message(json.dumps(log_payload, indent=4))
 
                 latest_data = df.row(-1, named=True)
+                latest_prices[asset.symbol] = latest_data['close']  # Store for portfolio update
                 entry_conditions, entry_data_context = self._check_entry_conditions(latest_data)
 
             self.log_message(f"Position: {position}, type: {type(position)}")
             if position:
-                # 5. IF WE HAVE A POSITION, CHECK THE EXIT CONDITIONS
                 exit_conditions, exit_reason, exit_data_context = self._check_exit_conditions(latest_data, asset)
                 if exit_conditions:
                     self.log_message(f"Exit conditions met for {asset.symbol}: {exit_reason}")
-                    # Create and submit the sell order (no quote asset needed for stocks)
                     order = self.create_order(
                         asset=asset,
                         quantity=position.quantity,
@@ -145,7 +183,6 @@ class StockStrategy(Strategy):
                     self.submit_order(order)
                     self.wait_for_order_execution(order)
                     
-                    # Update portfolio and emit events
                     completed_trades = self.portfolio.process_sell(
                         symbol=asset.symbol,
                         quantity=position.quantity,
@@ -155,21 +192,17 @@ class StockStrategy(Strategy):
                     )
                     
                     self.portfolio.update_performance_metrics()
-                    # self.portfolio.update_equity_curve(current_prices={asset.symbol: latest_data['close']})
 
+                    # Persist completed trades
                     for trade in completed_trades:
-                        self._emit_completed_trade(trade)
+                        self.persistence.save_completed_trade(trade)
                     
                     self._emit_trade_event("sell", asset.symbol, position.quantity, latest_data['close'])
-                    self._emit_position_update()
-                    self._emit_metrics_update()
 
-                # 9. If we have a position, check if DCA entry conditions are met
                 elif entry_conditions:
                     self.log_message(f"DCA Entry conditions met for {asset.symbol}: {entry_data_context}")  
                     position_size = self._calculate_position_size(asset, latest_data)
                     
-                    # Create and submit the buy order
                     order = self.create_order(
                         asset=asset,
                         quantity=position_size,
@@ -178,8 +211,6 @@ class StockStrategy(Strategy):
                     self.submit_order(order)
                     self.wait_for_order_execution(order)
                     
-                    # Update portfolio and emit events
-                    # Create PositionLot
                     new_lot = PositionLot(
                         symbol=asset.symbol,
                         quantity=Decimal(str(position_size)),
@@ -191,19 +222,17 @@ class StockStrategy(Strategy):
                         alpaca_order_id=str(order.id)
                     )
                     self.portfolio.add_buy(new_lot)
-                    self.portfolio.update_equity_curve(current_prices={asset.symbol: Decimal(str(latest_data['close']))})
+                    
+                    # Persist buy
+                    self.persistence.save_buy(new_lot)
                     
                     self._emit_trade_event("buy", asset.symbol, position_size, latest_data['close'])
-                    self._emit_position_update()
-                    self._emit_metrics_update()
 
             else:
-                # 10. If we don't have a position, check entry conditions
                 if entry_conditions:
                     self.log_message(f"Entry conditions met for {asset.symbol}: {entry_data_context}")
                     position_size = self._calculate_position_size(asset, latest_data)
                     
-                    # Create and submit the buy order (no quote asset needed for stocks)
                     order = self.create_order(
                         asset=asset,
                         quantity=position_size,
@@ -212,8 +241,6 @@ class StockStrategy(Strategy):
                     self.submit_order(order)
                     self.wait_for_order_execution(order)
 
-                    # Update portfolio and emit events
-                    # Create PositionLot
                     new_lot = PositionLot(
                         symbol=asset.symbol,
                         quantity=Decimal(str(position_size)),
@@ -225,19 +252,29 @@ class StockStrategy(Strategy):
                         alpaca_order_id=str(order.id)
                     )
                     self.portfolio.add_buy(new_lot)
-                    self.portfolio.update_equity_curve(current_prices={asset.symbol: Decimal(str(latest_data['close']))})
+                    
+                    # Persist buy
+                    self.persistence.save_buy(new_lot)
                     
                     self.log_message(f"Entry: \n Buying {position_size} shares of {asset} at price {df['close'][-1]:.2f}")
                     self._emit_trade_event("buy", asset.symbol, position_size, latest_data['close'])
-                    self._emit_position_update()
-                    self._emit_metrics_update()
-        self.log_message("Saving portfolio snapshot to DB")
-        self.log_message(f"Portfolio snapshot: {self.portfolio.model_dump_json()}")
 
-        self.log_message("**********************************************************************************")
-        self.log_message("**********************************************************************************")
-        self.log_message("**********************************************************************************")
-        self.log_message("**********************************************************************************")
+        # End of iteration - save portfolio snapshot
+        self.log_message("Saving portfolio snapshot to DB")
+        self.portfolio.update_performance_metrics()
+        
+        snapshot_data = self.portfolio.model_dump()
+        snapshot_data['user_id'] = str(snapshot_data['user_id'])
+        snapshot_data['strategy_id'] = str(snapshot_data['strategy_id'])
+        self.log_message(
+            self.portfolio.model_dump_json(indent=4, exclude={'user_id', 'strategy_id'}),
+            event_type=LogEventType.PORTFOLIO_SNAPSHOT
+        )
+        
+        # Persist portfolio snapshot
+        self.persistence.save_portfolio_snapshot(self.portfolio, latest_prices)
+        self.persistence.sync_portfolio_to_db(self.portfolio)
+
         self.log_message("**********************************************************************************")
 
     # All helper functions (_check_entry_conditions, _check_exit_conditions, 
@@ -256,9 +293,7 @@ class StockStrategy(Strategy):
     def _check_exit_conditions(self, row: pd.Series, asset: Asset) -> bool:
         """Check if any exit condition is met"""
         return self.condition_checker.check_exit_conditions(conditions=self.exit_conditions, 
-                                                       row=row,
-                                                       position=self.get_position(asset), 
-                                                       current_time=self.get_datetime())
+                                                       row=row)
     
     def _calculate_position_size(self, asset: Asset, latest_data: Dict[str, Any]) -> float:
         """Calculates position size based on risk management settings."""

@@ -71,7 +71,7 @@ class IndicatorFactory:
         Args:
             period: Period for SMA
         """
-        return pl.col("close").ta.sma(period).over("symbol").alias(f'sma_{period}')
+        return pl.col("close").ta.sma(period).alias(f'sma_{period}')
     
     def calculate_ema(self, period):
         """
@@ -80,7 +80,7 @@ class IndicatorFactory:
         Args:
             period: Period for EMA
         """
-        return pl.col("close").ta.ema(period).over("symbol").alias(f'ema_{period}')
+        return pl.col("close").ta.ema(period).alias(f'ema_{period}')
 
     def calculate_rsi(self, period):
         """
@@ -89,7 +89,7 @@ class IndicatorFactory:
         Args:
             period: Period for RSI
         """
-        return pl.col("close").ta.rsi(period).over("symbol").alias(f'rsi')
+        return pl.col("close").ta.rsi(period).alias(f'rsi')
     
     def calculate_macd(self, fast_period=12, slow_period=26, signal_period=9):
         """
@@ -100,11 +100,15 @@ class IndicatorFactory:
             slow_period: Slow period for MACD
             signal_period: Signal period for MACD
         """
-        return [
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macd").alias("macd_line"),
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdsignal").alias("macd_signal"),
-            pl.col("close").ta.macd(fast_period, slow_period, signal_period).over("symbol").struct.field("macdhist").alias("macd_hist")
-        ]
+        # Compute the struct once, then unnest the fields.
+        # Using a two-step approach avoids the Polars ShapeError that occurs
+        # when mixing struct.field().over() with other grouped expressions.
+        struct_expr = pl.col("close").ta.macd(fast_period, slow_period, signal_period).alias("_macd_struct")
+        return ("_macd_struct", struct_expr, {
+            "macd": "macd_line",
+            "macdsignal": "macd_signal",
+            "macdhist": "macd_hist",
+        })
     
     def calculate_bollinger_bands(self, period, std):
         """
@@ -114,12 +118,14 @@ class IndicatorFactory:
             period: Period for Bollinger Bands
             std: Standard deviation multiplier
         """
-        # Bollinger Bands returns a struct with upper, middle, and lower bands
-        return [
-            pl.col("close").ta.bbands(period, std).struct.field("upperband").over("symbol").alias(f'upperband'),
-            pl.col("close").ta.bbands(period, std).struct.field("middleband").over("symbol").alias(f'middleband'),
-            pl.col("close").ta.bbands(period, std).struct.field("lowerband").over("symbol").alias(f'lowerband')
-        ]
+        # Bollinger Bands returns a struct with upper, middle, and lower bands.
+        # Compute as struct first, then unnest to avoid Polars grouped-expression shape errors.
+        struct_expr = pl.col("close").ta.bbands(period, std).alias("_bbands_struct")
+        return ("_bbands_struct", struct_expr, {
+            "upperband": "upperband",
+            "middleband": "middleband",
+            "lowerband": "lowerband",
+        })
     
     def calculate_atr(self, period):
         """
@@ -133,7 +139,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).over("symbol").alias(f'atr')
+        ).alias(f'atr')
     
     def calculate_adx(self, period):
         """
@@ -147,7 +153,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).over("symbol").alias(f'adx')
+        ).alias(f'adx')
     
     def calculate_obv(self):
         """
@@ -156,7 +162,7 @@ class IndicatorFactory:
         return plta.obv(
             pl.col("close"),
             pl.col("volume")
-        ).over("symbol").alias(f'obv')
+        ).alias(f'obv')
     
     def calculate_mfi(self, period):
         """
@@ -171,7 +177,7 @@ class IndicatorFactory:
             pl.col("close"),
             pl.col("volume"),
             timeperiod=period
-        ).over("symbol").alias(f'mfi')
+        ).alias(f'mfi')
     
     def calculate_cci(self, period):
         """
@@ -185,7 +191,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).over("symbol").alias(f'cci')
+        ).alias(f'cci')
     
     def calculate_vwap(self, period):
         """
@@ -198,9 +204,8 @@ class IndicatorFactory:
         # Using a rolling window approach
         return (
             (pl.col("close") * pl.col("volume"))
-            .rolling_sum(window_size=period, min_periods=1)
-            .over("symbol") / 
-            pl.col("volume").rolling_sum(window_size=period, min_periods=1).over("symbol")
+            .rolling_sum(window_size=period, min_periods=1) / 
+            pl.col("volume").rolling_sum(window_size=period, min_periods=1)
         ).alias(f'vwap_calc')
 
     def calculate_indicators(self):
@@ -212,7 +217,7 @@ class IndicatorFactory:
             'sma': lambda params: self.calculate_sma(params['period']),
             'ema': lambda params: self.calculate_ema(params['period']),
             'rsi': lambda params: self.calculate_rsi(params['period']),
-            'macd': lambda params: self.calculate_macd(params.get('fast_period', 12), params.get('slow_period', 26), params.get('signal_period', 9)),
+            'macd': lambda params: self.calculate_macd(params.get('fast_period', params.get('fast', 12)), params.get('slow_period', params.get('slow', 26)), params.get('signal_period', params.get('signal', 9))),
             'bbands': lambda params: self.calculate_bollinger_bands(params['period'], params['std']),
             'atr': lambda params: self.calculate_atr(params['period']),
             'adx': lambda params: self.calculate_adx(params['period']),
@@ -222,8 +227,12 @@ class IndicatorFactory:
             'vwap': lambda params: self.calculate_vwap(params['period'])
         }
         
-        # Collect all expressions to apply
-        expressions = []
+        # Collect simple (scalar) expressions and struct-based indicators separately.
+        # Struct-returning indicators (MACD, BBands) must be applied in their own
+        # with_columns step to avoid Polars ShapeError when mixing grouped
+        # struct expressions with other grouped expressions.
+        simple_expressions = []
+        struct_indicators = []  # list of (tag, struct_expr, field_rename_map)
         
         # Process each indicator
         for indicator_key, indicator_params in self.params.items():
@@ -232,15 +241,39 @@ class IndicatorFactory:
             
             if base_name in indicator_methods:
                 result = indicator_methods[base_name](indicator_params)
-                # Handle both single expressions and lists of expressions
-                if isinstance(result, list):
-                    expressions.extend(result)
+                # Struct-returning indicators return a tuple (tag, expr, field_map)
+                if isinstance(result, tuple) and len(result) == 3:
+                    struct_indicators.append(result)
+                elif isinstance(result, list):
+                    simple_expressions.extend(result)
                 else:
-                    expressions.append(result)
+                    simple_expressions.append(result)
 
-        # Apply all expressions at once for efficiency
-        if expressions:
-            self.df = self.df.with_columns(expressions)
+        # 1. Apply simple (scalar) expressions one by one so a single
+        #    indicator that returns 0-length (data too short for its lookback)
+        #    doesn't break the whole batch.
+        for expr in simple_expressions:
+            try:
+                self.df = self.df.with_columns(expr)
+            except Exception as e:
+                logger.warning(f"Skipping indicator expression (data may be too short): {e}")
+
+        # 2. Apply each struct indicator: add struct column, unnest fields, drop temp
+        for temp_col, struct_expr, field_map in struct_indicators:
+            try:
+                self.df = self.df.with_columns(struct_expr)
+                # Extract each field from the struct and rename
+                for src_field, alias in field_map.items():
+                    self.df = self.df.with_columns(
+                        pl.col(temp_col).struct.field(src_field).alias(alias)
+                    )
+                self.df = self.df.drop(temp_col)
+            except Exception as e:
+                logger.warning(f"Skipping struct indicator '{temp_col}' (data may be too short): {e}")
+                if temp_col in self.df.columns:
+                    self.df = self.df.drop(temp_col)
+
+        if simple_expressions or struct_indicators:
             self.df = self._calculate_previous_values()
         return self.df
 
@@ -257,7 +290,7 @@ class IndicatorFactory:
         for col in prev_col_list:
             if col in result_df.columns:
                 prev_expressions.append(
-                    pl.col(col).shift(1).over("symbol").alias(f'{col}_prev')
+                    pl.col(col).shift(1).alias(f'{col}_prev')
                 )
         
         # Apply all shift operations at once
@@ -270,10 +303,5 @@ class IndicatorFactory:
         """
         Main method to calculate all indicators and return the enhanced DataFrame
         """
-        # Calculate all indicators
-        self.calculate_indicators()
-        
-        # Calculate previous values
-        result_df = self._calculate_previous_values()
-        
-        return result_df
+        # calculate_indicators already calls _calculate_previous_values
+        return self.calculate_indicators()

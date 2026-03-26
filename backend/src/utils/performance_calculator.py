@@ -2,10 +2,10 @@ import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 
-from models.backtest import BacktestResult
+from ..models.backtest import BacktestDetailedSummary
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class PerformanceCalculator:
         end_date: str,
         timeframe: str,
         equity_curve: Optional[List[Dict[str, Any]]] = None
-    ) -> BacktestResult:
+    ) -> BacktestDetailedSummary:
         """Create a BacktestResult object with calculated performance metrics"""
         
         # Calculate performance metrics
@@ -67,7 +67,7 @@ class PerformanceCalculator:
             formatted_equity_curve["cash"].append(round(float(point.get("cash", 0)), 2))
             formatted_equity_curve["positions_value"].append(round(float(point.get("positions_value", 0)), 2))
         
-        return BacktestResult(
+        return BacktestDetailedSummary(
             strategy_id=strategy_id,
             user_id=user_id,
             total_return=round(metrics['total_return'], 2),
@@ -88,7 +88,7 @@ class PerformanceCalculator:
     def _generate_equity_curve(self, trades: List[Dict], initial_capital: float) -> List[Dict[str, Any]]:
         """Generate equity curve data from trades"""
         if not trades:
-            return [{'date': datetime.utcnow().isoformat(), 'equity': round(initial_capital, 2)}]
+            return [{'date': datetime.now(tz=timezone.utc).isoformat(), 'equity': round(initial_capital, 2)}]
         
         df = pd.DataFrame(trades)
         

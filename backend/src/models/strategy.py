@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Any, Dict, Literal, Union
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, ConfigDict, BeforeValidator
 from typing_extensions import Annotated
 from bson import ObjectId
-
+import uuid
 # Helper for ObjectId handling
 PyObjectId = Annotated[str, BeforeValidator(str)]
 
@@ -63,8 +63,8 @@ class StrategyConfig(BaseModel):
     """Strategy configuration"""
     symbols: List[str] = Field(..., description="Trading symbols")
     timeframe: str = Field(..., description="Chart timeframe (1d, 1h, 15m, etc.)")
-    start_date: str = Field(..., description="Strategy start date")
-    end_date: str = Field(..., description="Strategy end date")
+    start_date: Optional[str] = Field(None, description="Strategy start date")
+    end_date: Optional[str] = Field(None, description="Strategy end date")
     entry_conditions: List[Dict[str, Any]] = Field(default_factory=list, description="Entry conditions")
     exit_conditions: List[Dict[str, Any]] = Field(default_factory=list, description="Exit conditions")
     risk_management: RiskManagement = Field(default_factory=RiskManagement, description="Risk management settings")
@@ -87,9 +87,35 @@ class StrategyConfig(BaseModel):
         """Convert timeframe to uppercase"""
         return v.upper() if isinstance(v, str) else v
 
+class StrategyCreate(BaseModel):
+    """Model for creating a new strategy - no _id required"""
+    name: str
+    description: Optional[str] = None
+    config: Dict[str, Any]
+    is_active: bool = False
+    is_paper: bool = True
+    
+    class Config:
+        extra = "ignore"  # Ignore extra fields like empty _id
+
+class StrategyResponse(BaseModel):
+    """Model for strategy response - includes _id"""
+    id: Optional[str] = Field(None, alias="_id")
+    name: str
+    description: Optional[str] = None
+    config: Dict[str, Any]
+    is_active: bool = False
+    is_paper: bool = True
+    user_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        populate_by_name = True
+
 class Strategy(BaseModel):
     """Main strategy model"""
-    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    id: PyObjectId = Field(default_factory=ObjectId, alias="_id")
     user_id: PyObjectId = Field(..., description="User who owns this strategy")
     name: str = Field(..., min_length=1, max_length=100, description="Strategy name")
     description: Optional[str] = Field(None, max_length=500, description="Strategy description")
@@ -97,8 +123,8 @@ class Strategy(BaseModel):
     is_active: bool = Field(default=False, description="Whether strategy is actively trading")
     is_paper: bool = Field(default=True, description="Whether this is paper trading")
     performance_stats: Optional[Dict[str, Any]] = Field(None, description="Live performance statistics")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     
     @field_validator('name', 'description')
     @classmethod

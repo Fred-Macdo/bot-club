@@ -26,6 +26,6 @@ yfinance
 motor==3.7.1
 pytest
 pytest-asyncio
-
-pytest
-pytest-asyncio
+celery[redis]==5.3.6
+polars-talib>=0.1.5
+flower
