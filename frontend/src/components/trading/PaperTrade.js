@@ -9,8 +9,10 @@ import {
 import { Assessment as AssessmentIcon } from '@mui/icons-material';
 import {
   StrategySelector,
+  StrategyConfigPanel,
   AccountPerformance,
   IndicatorTracking,
+  PriceDataframeCard,
   Trades,
   Positions,
   TradingLogs
@@ -29,28 +31,36 @@ const PaperTradingPage = () => {
       {/* Strategy Selection and Deployment */}
       <StrategySelector mode="paper" />
 
+      {/* Strategy Configuration Details */}
+      <StrategyConfigPanel mode="paper" />
+
       {/* Account Performance - Metrics and Equity Chart */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <AccountPerformance />
+        <AccountPerformance mode="paper" />
       </Stack>
 
       {/* Indicator Tracking */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <IndicatorTracking />
+        <IndicatorTracking mode="paper" />
+      </Stack>
+
+      {/* Price Dataframe */}
+      <Stack spacing={3} sx={{ mb: 3 }}>
+        <PriceDataframeCard mode="paper" />
       </Stack>
 
       {/* Trading Logs */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <TradingLogs />
+        <TradingLogs mode="paper" />
       </Stack>
 
       {/* Current Positions */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <Positions />
+        <Positions mode="paper" />
       </Stack>
 
       {/* Completed Trades */}
-      <Trades />
+      <Trades mode="paper" />
     </Container>
   );
 };

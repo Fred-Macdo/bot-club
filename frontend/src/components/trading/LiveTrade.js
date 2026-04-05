@@ -9,8 +9,10 @@ import {
 import { TrendingUp as TrendingUpIcon } from '@mui/icons-material';
 import {
   StrategySelector,
+  StrategyConfigPanel,
   AccountPerformance,
   IndicatorTracking,
+  PriceDataframeCard,
   Trades,
   Positions,
   TradingLogs
@@ -29,28 +31,36 @@ const LiveTradingPage = () => {
       {/* Strategy Selection and Deployment */}
       <StrategySelector mode="live" />
 
+      {/* Strategy Configuration Details */}
+      <StrategyConfigPanel mode="live" />
+
       {/* Account Performance - Metrics and Equity Chart */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <AccountPerformance />
+        <AccountPerformance mode="live" />
       </Stack>
 
       {/* Indicator Tracking */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <IndicatorTracking />
+        <IndicatorTracking mode="live" />
+      </Stack>
+
+      {/* Price Dataframe */}
+      <Stack spacing={3} sx={{ mb: 3 }}>
+        <PriceDataframeCard mode="live" />
       </Stack>
 
       {/* Trading Logs */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <TradingLogs />
+        <TradingLogs mode="live" />
       </Stack>
 
       {/* Current Positions */}
       <Stack spacing={3} sx={{ mb: 3 }}>
-        <Positions />
+        <Positions mode="live" />
       </Stack>
 
       {/* Completed Trades */}
-      <Trades />
+      <Trades mode="live" />
     </Container>
   );
 };

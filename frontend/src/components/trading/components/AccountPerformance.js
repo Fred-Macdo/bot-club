@@ -8,16 +8,16 @@ import {
   useTheme
 } from '@mui/material';
 import Plot from 'react-plotly.js';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 
-const AccountPerformance = () => {
+const AccountPerformance = ({ mode = 'paper' }) => {
   const theme = useTheme();
   
   const {
     isDeployed,
     metrics,
     portfolioHistory
-  } = useDeployedStrategy();
+  } = useTradingMode(mode);
 
   const pnlDataPoints = useMemo(() => {
     if (portfolioHistory && portfolioHistory.length > 0) {

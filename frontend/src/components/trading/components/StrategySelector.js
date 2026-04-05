@@ -14,7 +14,10 @@ import {
   Alert,
   CircularProgress,
   Autocomplete,
-  TextField
+  TextField,
+  FormControlLabel,
+  Switch,
+  Tooltip
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -23,8 +26,15 @@ import {
 } from '@mui/icons-material';
 import { useSearchParams } from 'react-router-dom';
 import { useStrategy } from '../../../context/StrategyContext';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 import { deployStrategy, stopStrategy } from '../../../api/Client';
+
+// Mirror of backend AVAILABLE_CRYPTO_ASSETS for frontend asset-type detection
+const CRYPTO_SYMBOLS = new Set([
+  'AAVE', 'AVAX', 'BAT', 'BCH', 'BTC', 'CRV', 'DOGE', 'DOT', 'ETH', 'GRT',
+  'LINK', 'LTC', 'MKR', 'PEPE', 'SHIB', 'SOL', 'SUSHI', 'TRUMP', 'UNI',
+  'USDC', 'USDG', 'USDT', 'XRP', 'XTZ', 'YFI',
+]);
 
 const transformDefaultStrategies = (backendStrategies) => {
   return backendStrategies.map((strategy, index) => {
@@ -81,7 +91,7 @@ const StrategySelector = ({ mode = 'paper' }) => {
     defaultStrategies
   } = useStrategy();
   
-  // Get deployment state from DeployedStrategyContext
+  // Get deployment state from DeployedStrategyContext (mode-specific)
   const {
     deployedStrategy,
     isDeployed,
@@ -93,12 +103,13 @@ const StrategySelector = ({ mode = 'paper' }) => {
     setDeploymentState,
     socketStatus,
     socketError
-  } = useDeployedStrategy();
+  } = useTradingMode(mode);
   
   // Local state for UI
   const [selectedStrategy, setSelectedStrategy] = useState(deployedStrategy);
   const [isLoading, setIsLoading] = useState(false);
   const [initialCapital, setInitialCapital] = useState(100000);
+  const [extendedHours, setExtendedHours] = useState(false);
   
   // Sync selectedStrategy with deployedStrategy from context
   useEffect(() => {
@@ -126,11 +137,18 @@ const StrategySelector = ({ mode = 'paper' }) => {
       maxDrawdown: null,
       winRate: null,
       totalTrades: null,
-      createdAt: strategy.created_at
+      createdAt: strategy.created_at,
+      config: strategy.config
     }));
 
     return [...transformedDefaultStrategies, ...userStrategiesFormatted];
   }, [strategies, defaultStrategies]);
+
+  // Detect whether the selected strategy trades stocks (vs crypto)
+  const isStockStrategy = useMemo(() => {
+    if (!selectedStrategy?.config?.symbols?.length) return false;
+    return selectedStrategy.config.symbols.every(s => !CRYPTO_SYMBOLS.has(s.toUpperCase()));
+  }, [selectedStrategy]);
 
   const handleDeployStrategy = async () => {
     if (!selectedStrategy) {
@@ -141,7 +159,7 @@ const StrategySelector = ({ mode = 'paper' }) => {
     setIsLoading(true);
     
     try {
-      const result = await deployStrategy(selectedStrategy.id, mode, dataProvider, initialCapital);
+      const result = await deployStrategy(selectedStrategy.id, mode, dataProvider, initialCapital, extendedHours);
       if (!result.success) {
         console.error("Deployment failed:", result.error);
         alert(`Deployment failed: ${result.error}`);
@@ -276,6 +294,22 @@ const StrategySelector = ({ mode = 'paper' }) => {
                 inputProps={{ min: 0, step: 1000 }}
               />
             </Box>
+            {isStockStrategy && (
+              <Box sx={{ flex: '1 1 200px', minWidth: '200px', display: 'flex', alignItems: 'center' }}>
+                <Tooltip title="Trade during pre-market (4:00 AM) and after-hours (until 8:00 PM ET) in addition to regular hours">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={extendedHours}
+                        onChange={(e) => setExtendedHours(e.target.checked)}
+                        disabled={isDeployed}
+                      />
+                    }
+                    label="Extended Hours"
+                  />
+                </Tooltip>
+              </Box>
+            )}
             <Box sx={{ flex: '1 1 320px', minWidth: '320px', display: 'flex', gap: 2 }}>
               <Button
                 variant="contained"
@@ -318,6 +352,12 @@ const StrategySelector = ({ mode = 'paper' }) => {
               {!socketError && (isDeployed || socketStatus === 'connected') && (
                 <Alert severity="success" sx={{ mb: 1 }}>
                   <strong>Strategy "{selectedStrategy.name}" is active.</strong> Real-time logs and performance data are being streamed.
+                </Alert>
+              )}
+              {!socketError && isDeployed && !activeTaskId && isStockStrategy && (
+                <Alert severity="info" sx={{ mb: 1 }}>
+                  <strong>Scheduled:</strong> Strategy "{selectedStrategy.name}" will begin trading at the next market open
+                  {extendedHours ? ' (4:00 AM ET)' : ' (9:30 AM ET)'}.
                 </Alert>
               )}
               {!socketError && socketStatus === 'disconnected' && isDeployed && (

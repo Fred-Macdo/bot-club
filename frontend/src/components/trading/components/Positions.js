@@ -8,14 +8,14 @@ import {
   useTheme
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 
-const Positions = () => {
+const Positions = ({ mode = 'paper' }) => {
   const theme = useTheme();
   
   const {
     positions
-  } = useDeployedStrategy();
+  } = useTradingMode(mode);
 
   const positionColumns = [
     { field: 'symbol', headerName: 'Symbol', width: 130 },
@@ -25,9 +25,8 @@ const Positions = () => {
       headerName: 'Entry Price', 
       width: 150, 
       type: 'number',
-      valueFormatter: (params) => {
-        const val = params?.value !== undefined ? params.value : params;
-        return val ? `$${Number(val).toFixed(4)}` : 'N/A';
+      valueFormatter: (value) => {
+        return value ? `$${Number(value).toFixed(4)}` : 'N/A';
       }
     },
     { 
@@ -35,20 +34,18 @@ const Positions = () => {
       headerName: 'Cost Basis', 
       width: 150, 
       type: 'number',
-      valueFormatter: (params) => {
-        const val = params?.value !== undefined ? params.value : params;
-        return val ? `$${Number(val).toFixed(2)}` : 'N/A';
+      valueFormatter: (value) => {
+        return value ? `$${Number(value).toFixed(2)}` : 'N/A';
       }
     },
     { 
       field: 'entry_time', 
       headerName: 'Entry Time', 
       width: 180, 
-      valueFormatter: (params) => {
-        const val = params?.value !== undefined ? params.value : params;
-        if (!val) return 'N/A';
+      valueFormatter: (value) => {
+        if (!value) return 'N/A';
         try {
-          return new Date(val).toLocaleString();
+          return new Date(value).toLocaleString();
         } catch {
           return 'N/A';
         }

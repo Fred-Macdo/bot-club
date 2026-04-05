@@ -6,16 +6,16 @@ import {
   Alert,
   useTheme
 } from '@mui/material';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 import LogRenderer from '../logs/LogRenderer';
 
-const TradingLogs = () => {
+const TradingLogs = ({ mode = 'paper' }) => {
   const theme = useTheme();
   
   const {
     logs,
     socketError
-  } = useDeployedStrategy();
+  } = useTradingMode(mode);
 
   return (
     <Paper sx={{ p: 2, height: 400, display: 'flex', flexDirection: 'column' }}>

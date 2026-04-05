@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { useDeployedStrategy } from '../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../context/DeployedStrategyContext';
 
 // Helper to format the timestamp
 const formatTime = (timestamp) => {
@@ -13,8 +13,8 @@ const formatTime = (timestamp) => {
   });
 };
 
-const TradingLog = () => {
-  const { logs, socketStatus, socketError } = useDeployedStrategy();
+const TradingLog = ({ mode = 'paper' }) => {
+  const { logs, socketStatus, socketError } = useTradingMode(mode);
   const bottomRef = useRef(null);
 
   // Auto-scroll to bottom nicely when new logs arrive

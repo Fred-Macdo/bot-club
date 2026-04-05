@@ -7,20 +7,19 @@ import {
   useTheme
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 
-const Trades = () => {
+const Trades = ({ mode = 'paper' }) => {
   const theme = useTheme();
   
   const {
     completedTrades
-  } = useDeployedStrategy();
+  } = useTradingMode(mode);
 
   const tradeColumns = [
     { field: 'trade_id', headerName: 'ID', width: 100,
-      valueGetter: (params) => {
-        if (!params || !params.row) return '';
-        const id = params.row.trade_id || params.row.id || '';
+      valueGetter: (value, row) => {
+        const id = row?.trade_id || row?.id || '';
         return typeof id === 'string' && id.length > 8 ? id.slice(0, 8) + '...' : id;
       }
     },
@@ -29,10 +28,7 @@ const Trades = () => {
       field: 'side', 
       headerName: 'Side', 
       width: 80, 
-      valueGetter: (params) => {
-        if (!params || !params.row) return 'SELL';
-        return params.row.side || 'SELL';
-      },
+      valueGetter: (value, row) => row?.side || 'SELL',
       renderCell: (params) => {
         const val = params?.value || 'SELL';
         return <Chip label={val} color={val === 'BUY' ? 'success' : 'error'} size="small"/>;
@@ -43,10 +39,10 @@ const Trades = () => {
       headerName: 'Quantity', 
       width: 110, 
       type: 'number',
-      valueGetter: (params) => params?.row?.quantity ?? null,
-      valueFormatter: (params) => {
-        if (params?.value == null) return 'N/A';
-        try { return Number(params.value).toFixed(4); } catch { return 'N/A'; }
+      valueGetter: (value, row) => row?.quantity ?? null,
+      valueFormatter: (value) => {
+        if (value == null) return 'N/A';
+        try { return Number(value).toFixed(4); } catch { return 'N/A'; }
       }
     },
     { 
@@ -54,10 +50,10 @@ const Trades = () => {
       headerName: 'Entry Price', 
       width: 120, 
       type: 'number',
-      valueGetter: (params) => params?.row?.entry_price ?? params?.row?.entryPrice ?? null,
-      valueFormatter: (params) => {
-        if (params?.value == null) return 'N/A';
-        try { return `$${Number(params.value).toFixed(4)}`; } catch { return 'N/A'; }
+      valueGetter: (value, row) => row?.entry_price ?? row?.entryPrice ?? null,
+      valueFormatter: (value) => {
+        if (value == null) return 'N/A';
+        try { return `$${Number(value).toFixed(4)}`; } catch { return 'N/A'; }
       }
     },
     { 
@@ -65,10 +61,10 @@ const Trades = () => {
       headerName: 'Exit Price', 
       width: 120, 
       type: 'number',
-      valueGetter: (params) => params?.row?.exit_price ?? params?.row?.exitPrice ?? null,
-      valueFormatter: (params) => {
-        if (params?.value == null) return 'N/A';
-        try { return `$${Number(params.value).toFixed(4)}`; } catch { return 'N/A'; }
+      valueGetter: (value, row) => row?.exit_price ?? row?.exitPrice ?? null,
+      valueFormatter: (value) => {
+        if (value == null) return 'N/A';
+        try { return `$${Number(value).toFixed(4)}`; } catch { return 'N/A'; }
       }
     },
     { 
@@ -76,14 +72,14 @@ const Trades = () => {
       headerName: 'Entry Time', 
       width: 180, 
       type: 'dateTime', 
-      valueGetter: (params) => {
-        const t = params?.row?.entry_time ?? params?.row?.entryTime;
+      valueGetter: (value, row) => {
+        const t = row?.entry_time ?? row?.entryTime;
         if (!t) return null;
         try { return new Date(t); } catch { return null; }
       },
-      valueFormatter: (params) => {
-        if (!params?.value) return 'N/A';
-        try { return params.value.toLocaleString(); } catch { return 'N/A'; }
+      valueFormatter: (value) => {
+        if (!value) return 'N/A';
+        try { return value.toLocaleString(); } catch { return 'N/A'; }
       }
     },
     { 
@@ -91,14 +87,14 @@ const Trades = () => {
       headerName: 'Exit Time', 
       width: 180, 
       type: 'dateTime', 
-      valueGetter: (params) => {
-        const t = params?.row?.exit_time ?? params?.row?.exitTime;
+      valueGetter: (value, row) => {
+        const t = row?.exit_time ?? row?.exitTime;
         if (!t) return null;
         try { return new Date(t); } catch { return null; }
       },
-      valueFormatter: (params) => {
-        if (!params?.value) return 'N/A';
-        try { return params.value.toLocaleString(); } catch { return 'N/A'; }
+      valueFormatter: (value) => {
+        if (!value) return 'N/A';
+        try { return value.toLocaleString(); } catch { return 'N/A'; }
       }
     },
     { 
@@ -106,7 +102,7 @@ const Trades = () => {
       headerName: 'P&L', 
       width: 120, 
       type: 'number', 
-      valueGetter: (params) => params?.row?.realized_pnl ?? params?.row?.pnl ?? null,
+      valueGetter: (value, row) => row?.realized_pnl ?? row?.pnl ?? null,
       renderCell: (params) => {
         if (params?.value == null) return <Typography variant="body2">N/A</Typography>;
         try {
@@ -131,7 +127,7 @@ const Trades = () => {
       field: 'exit_reason', 
       headerName: 'Reason', 
       width: 140, 
-      valueGetter: (params) => params?.row?.exit_reason || params?.row?.status || 'Closed',
+      valueGetter: (value, row) => row?.exit_reason || row?.status || 'Closed',
     }
   ];
 

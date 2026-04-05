@@ -1,13 +1,17 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Typography,
   Paper,
   Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
   useTheme
 } from '@mui/material';
-import Plot from 'react-plotly.js';
-import { useDeployedStrategy } from '../../../context/DeployedStrategyContext';
+import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
+import FinancialChart from './FinancialChart';
+import { useTradingMode } from '../../../context/DeployedStrategyContext';
 
 /**
  * Group indicator columns into logical chart groups.
@@ -24,7 +28,8 @@ const groupColumns = (columns) => {
     if (lower.startsWith('macd')) {
       if (!groups['MACD']) groups['MACD'] = { cols: [], overlay: false };
       groups['MACD'].cols.push(col);
-    } else if (lower.startsWith('bb_') || lower.startsWith('bollinger') || lower.startsWith('bband')) {
+    } else if (lower.startsWith('bb_') || lower.startsWith('bollinger') || lower.startsWith('bband')
+               || lower === 'upperband' || lower === 'middleband' || lower === 'lowerband') {
       if (!groups['Bollinger Bands']) groups['Bollinger Bands'] = { cols: [], overlay: true };
       groups['Bollinger Bands'].cols.push(col);
     } else if (lower.startsWith('rsi')) {
@@ -64,79 +69,76 @@ const groupColumns = (columns) => {
   return groups;
 };
 
-const LINE_COLORS = [
-  '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
-  '#9467bd', '#8c564b', '#e377c2', '#7f7f7f',
-];
-
-const IndicatorTracking = () => {
+const IndicatorTracking = ({ mode = 'paper' }) => {
   const theme = useTheme();
 
-  const { isDeployed, indicatorData } = useDeployedStrategy();
+  const { isDeployed, indicatorData } = useTradingMode(mode);
 
-  const charts = useMemo(() => {
+  // Build per-(symbol × indicator group) accordion items
+  const accordionItems = useMemo(() => {
     if (!indicatorData || Object.keys(indicatorData).length === 0) return [];
 
-    const allCharts = [];
+    const items = [];
 
-    Object.entries(indicatorData).forEach(([symbol, data]) => {
-      if (!data.columns || !data.rows || data.rows.length === 0) return;
+    Object.entries(indicatorData).forEach(([symbol, symbolData]) => {
+      if (!symbolData.columns || !symbolData.rows || symbolData.rows.length === 0) return;
 
-      const groups = groupColumns(data.columns);
-      const rows = data.rows;
-      const timestamps = rows.map(r => r.datetime ? new Date(r.datetime) : null).filter(Boolean);
-      const closeValues = rows.map(r => r.close);
+      const groups = groupColumns(symbolData.columns);
+
+      // Transform rows: datetime string → Date object, ensure OHLCV are numbers
+      const chartRows = symbolData.rows
+        .map((r) => {
+          const date = r.datetime ? new Date(r.datetime) : null;
+          if (!date || isNaN(date.getTime())) return null;
+          return {
+            ...r,
+            date,
+            open: Number(r.open) || 0,
+            high: Number(r.high) || 0,
+            low: Number(r.low) || 0,
+            close: Number(r.close) || 0,
+            volume: Number(r.volume) || 0,
+          };
+        })
+        .filter(Boolean);
+
+      if (chartRows.length === 0) return;
 
       Object.entries(groups).forEach(([groupName, { cols, overlay }]) => {
-        const traces = [];
+        // Only include columns that have at least one non-null value
+        const activeCols = cols.filter((col) =>
+          chartRows.some((r) => r[col] != null)
+        );
+        if (activeCols.length === 0 && !overlay) return;
 
-        // For overlay indicators, include close as reference
-        if (overlay && closeValues.some(v => v != null)) {
-          traces.push({
-            x: timestamps,
-            y: closeValues,
-            type: 'scatter',
-            mode: 'lines',
-            name: 'Close',
-            line: { color: theme.palette.text.secondary, width: 1, dash: 'dot' },
-          });
-        }
-
-        cols.forEach((col, idx) => {
-          const values = rows.map(r => r[col]);
-          if (values.every(v => v == null)) return;
-
-          const isHistogram = col.toLowerCase().includes('histogram') || col.toLowerCase().includes('hist');
-
-          traces.push({
-            x: timestamps,
-            y: values,
-            type: isHistogram ? 'bar' : 'scatter',
-            mode: isHistogram ? undefined : 'lines',
-            name: col,
-            line: isHistogram ? undefined : {
-              color: LINE_COLORS[idx % LINE_COLORS.length],
-              width: 2,
-            },
-            marker: isHistogram ? {
-              color: values.map(v => v >= 0 ? theme.palette.success.main : theme.palette.error.main),
-            } : undefined,
-          });
+        items.push({
+          key: `${symbol}-${groupName}`,
+          title: `${groupName} — ${symbol}`,
+          symbol,
+          groupName,
+          cols: activeCols,
+          overlay,
+          data: chartRows,
         });
-
-        if (traces.length > 0) {
-          allCharts.push({
-            key: `${symbol}-${groupName}`,
-            title: `${groupName}${Object.keys(indicatorData).length > 1 ? ` (${symbol})` : ''}`,
-            traces,
-            overlay,
-          });
-        }
       });
     });
 
-    return allCharts;
-  }, [indicatorData, theme]);
+    return items;
+  }, [indicatorData]);
+
+  // Track which accordion is expanded (first one by default)
+  const [expanded, setExpanded] = useState(null);
+
+  const handleAccordionChange = (panel) => (_, isExpanded) => {
+    setExpanded(isExpanded ? panel : null);
+  };
+
+  // Auto-expand first accordion when items appear
+  useMemo(() => {
+    if (accordionItems.length > 0 && expanded === null) {
+      setExpanded(accordionItems[0].key);
+    }
+  }, [accordionItems.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!isDeployed) {
     return (
@@ -149,7 +151,7 @@ const IndicatorTracking = () => {
     );
   }
 
-  if (charts.length === 0) {
+  if (accordionItems.length === 0) {
     return (
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>Indicator Tracking</Typography>
@@ -161,41 +163,39 @@ const IndicatorTracking = () => {
   }
 
   return (
-    <Paper sx={{ p: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        Indicator Tracking
-        <Chip
-          label={`${charts.length} indicator${charts.length > 1 ? 's' : ''}`}
-          size="small"
-          color="primary"
-          sx={{ ml: 2 }}
-        />
-      </Typography>
-
-      {charts.map(chart => (
-        <Box key={chart.key} sx={{ mb: 3 }}>
-          <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 'bold' }}>
-            {chart.title}
-          </Typography>
-          <Plot
-            data={chart.traces}
-            layout={{
-              height: 260,
-              margin: { l: 50, r: 20, b: 40, t: 10 },
-              xaxis: { type: 'date', gridcolor: theme.palette.divider },
-              yaxis: { gridcolor: theme.palette.divider, tickformat: chart.overlay ? '$,.4f' : ',.4f' },
-              plot_bgcolor: theme.palette.background.paper,
-              paper_bgcolor: theme.palette.background.paper,
-              font: { color: theme.palette.text.primary, size: 11 },
-              legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0, font: { size: 10 } },
-              showlegend: true,
-            }}
-            style={{ width: '100%' }}
-            config={{ responsive: true, displaylogo: false, displayModeBar: false }}
-          />
-        </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Typography variant="h6" sx={{ mb: 0.5 }}>Indicator Tracking</Typography>
+      {accordionItems.map(item => (
+        <Accordion
+          key={item.key}
+          expanded={expanded === item.key}
+          onChange={handleAccordionChange(item.key)}
+          disableGutters
+        >
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="subtitle1" fontWeight="bold">{item.title}</Typography>
+              <Chip
+                label={item.overlay ? 'overlay' : 'standalone'}
+                size="small"
+                color={item.overlay ? 'primary' : 'secondary'}
+                variant="outlined"
+              />
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails sx={{ p: 1, overflow: 'hidden' }}>
+            <FinancialChart
+              data={item.data}
+              indicatorCols={item.cols}
+              overlay={item.overlay}
+              groupName={item.groupName}
+              symbol={item.symbol}
+              height={item.overlay ? 380 : 260}
+            />
+          </AccordionDetails>
+        </Accordion>
       ))}
-    </Paper>
+    </Box>
   );
 };
 

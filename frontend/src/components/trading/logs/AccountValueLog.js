@@ -2,13 +2,27 @@ import React from 'react';
 import { Box, Typography, useTheme, Chip } from '@mui/material';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 
+const parseAccountData = (log) => {
+  if (log.data?.account_value != null) return log.data;
+  if (typeof log.message === 'string') {
+    try { return JSON.parse(log.message); } catch { /* ignore */ }
+  }
+  return null;
+};
+
 const AccountValueLog = ({ log }) => {
   const theme = useTheme();
   const timestamp = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '';
+  const parsed = parseAccountData(log);
+  const accountValue = parsed?.account_value;
+  const cash = parsed?.cash;
 
-  // Parse value from string "Account Value: 12345.67"
-  const valueMatch = log.message.match(/Account Value:\s*([\d.]+)/);
-  const value = valueMatch ? parseFloat(valueMatch[1]).toFixed(2) : null;
+  const fmtValue = accountValue != null
+    ? `$${Number(accountValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : null;
+  const fmtCash = cash != null
+    ? `$${Number(cash).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : null;
 
   return (
     <Box sx={{ mb: 1, borderBottom: `1px solid ${theme.palette.divider}`, pb: 1, p: 1 }}>
@@ -24,9 +38,14 @@ const AccountValueLog = ({ log }) => {
           variant="outlined" 
           sx={{ height: 20, fontSize: '0.7rem', mr: 1 }}
         />
-         <Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>
-           {value ? `$${value}` : log.message}
-         </Typography>
+        <Typography variant="body2" sx={{ fontWeight: 'bold', color: theme.palette.success.main }}>
+          {fmtValue || log.message}
+        </Typography>
+        {fmtCash && (
+          <Typography variant="body2" sx={{ ml: 2, color: theme.palette.text.secondary }}>
+            Cash: {fmtCash}
+          </Typography>
+        )}
       </Box>
     </Box>
   );
