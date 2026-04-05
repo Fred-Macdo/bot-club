@@ -138,6 +138,20 @@ const StrategyBuilderInterface = () => {
   const timeframes = ['1Min ', '2Min', '5Min', '10Min', '15Min', '30Min', '1Hour', '4Hour', '1Day', '2Day', '1Week', '2Week', '1Month', '3Month'];
     // Popular symbols for autocomplete suggestions
   const popularSymbols = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'CRM', 'BTC-USD', 'ETH-USD', 'SPY', 'QQQ', 'VOO'];
+
+  // Crypto symbols for mixed-asset detection
+  const CRYPTO_SYMBOLS = new Set([
+    'AAVE', 'AVAX', 'BAT', 'BCH', 'BTC', 'CRV', 'DOGE', 'DOT', 'ETH', 'GRT',
+    'LINK', 'LTC', 'MKR', 'PEPE', 'SHIB', 'SOL', 'SUSHI', 'TRUMP', 'UNI',
+    'USDC', 'USDG', 'USDT', 'XRP', 'XTZ', 'YFI',
+  ]);
+
+  const hasMixedAssets = (() => {
+    const syms = strategyConfig.symbols.map(s => s.toUpperCase().replace(/-USD$/, ''));
+    const hasCrypto = syms.some(s => CRYPTO_SYMBOLS.has(s));
+    const hasStock = syms.some(s => !CRYPTO_SYMBOLS.has(s));
+    return hasCrypto && hasStock;
+  })();
   // Available value options for conditions
   const ohlcvColumns = ['Open', 'High', 'Low', 'Close', 'Volume'];
   
@@ -631,6 +645,12 @@ ${strategyConfig.indicators.map(indicator =>
               />
             ))}
           </Box>
+
+          {hasMixedAssets && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Strategies cannot mix crypto and stock symbols. Please use only crypto or only stock assets.
+            </Alert>
+          )}
 
           {strategyConfig.symbols.length === 0 && (
             <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>

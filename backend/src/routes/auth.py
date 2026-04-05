@@ -13,7 +13,7 @@ from ..models.user import UserCreate, UserInDB, UserProfile, Token
 from ..crud.user import create_user, get_user_by_email, get_user_by_username, create_user_from_google
 from ..crud.strategy import get_strategies_by_user_id
 from ..utils.security import verify_password, create_access_token
-from ..config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from ..config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
 
 router = APIRouter()
 
@@ -86,7 +86,7 @@ async def login_for_access_token(
         return {
             "access_token": access_token,
             "token_type": "bearer",
-            "expires_in": 180000  # 30 minutes
+            "expires_in": 1800  # 30 minutes in seconds
         }
         
     except HTTPException:
@@ -151,8 +151,8 @@ async def google_callback(
     try:
         # Exchange authorization code for tokens
         async with httpx.AsyncClient() as client:
-            # Get the redirect URI from the frontend
-            redirect_uri = "http://localhost:3000/auth/google/callback"
+            # Get the redirect URI from config (env var)
+            redirect_uri = GOOGLE_REDIRECT_URI
             
             token_response = await client.post(
                 "https://oauth2.googleapis.com/token",

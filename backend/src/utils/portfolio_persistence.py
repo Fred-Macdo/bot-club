@@ -25,18 +25,20 @@ class PortfolioPersistence:
     Handles MongoDB persistence and Redis stream publishing for portfolio updates.
     """
     
-    def __init__(self, db, stream_publisher, strategy_id: str, user_id: str):
+    def __init__(self, db, stream_publisher, strategy_id: str, user_id: str, mode: str = 'paper'):
         """
         Args:
             db: MongoDB database instance
             stream_publisher: Function to publish to Redis stream (event_type, payload)
             strategy_id: The strategy ID
             user_id: The user ID
+            mode: Trading mode ('paper' or 'live')
         """
         self.db = db
         self.stream_publisher = stream_publisher
         self.strategy_id = str(strategy_id)
         self.user_id = str(user_id)
+        self.mode = mode
         
     def _serialize_for_mongo(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Convert Decimal and other types for MongoDB storage"""
@@ -77,6 +79,7 @@ class PortfolioPersistence:
             lot_data = lot.model_dump() if hasattr(lot, 'model_dump') else lot.__dict__.copy()
             lot_data['strategy_id'] = self.strategy_id
             lot_data['user_id'] = self.user_id
+            lot_data['mode'] = self.mode
             lot_data['created_at'] = datetime.now(tz=timezone.utc)
             lot_data['status'] = 'open'
             
@@ -128,6 +131,7 @@ class PortfolioPersistence:
             trade_data = trade.model_dump() if hasattr(trade, 'model_dump') else trade.__dict__.copy()
             trade_data['strategy_id'] = self.strategy_id
             trade_data['user_id'] = self.user_id
+            trade_data['mode'] = self.mode
             trade_data['created_at'] = datetime.now(tz=timezone.utc)
             
             mongo_data = self._serialize_for_mongo(trade_data)
@@ -348,10 +352,11 @@ class PortfolioPersistence:
             portfolio_data = portfolio.model_dump() if hasattr(portfolio, 'model_dump') else portfolio.__dict__.copy()
             mongo_data = self._serialize_for_mongo(portfolio_data)
             mongo_data['updated_at'] = datetime.now(tz=timezone.utc)
+            mongo_data['mode'] = self.mode
             
             if self.db is not None:
                 self.db.strategy_portfolios.update_one(
-                    {'strategy_id': self.strategy_id, 'user_id': self.user_id},
+                    {'strategy_id': self.strategy_id, 'user_id': self.user_id, 'mode': self.mode},
                     {'$set': mongo_data},
                     upsert=True
                 )

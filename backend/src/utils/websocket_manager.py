@@ -7,10 +7,24 @@ import json
 import logging
 from typing import Optional
 from fastapi import WebSocket, WebSocketDisconnect, Query
+from jose import JWTError, jwt
 from redis.asyncio import Redis
 from ..config import REDIS_URL
 
 logger = logging.getLogger(__name__)
+
+
+def verify_ws_token(token: str) -> Optional[str]:
+    """Verify JWT token from WebSocket query param. Returns user_id or None."""
+    import os
+    secret = os.getenv("JWT_SECRET_KEY")
+    if not secret:
+        return None
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return payload.get("sub")
+    except JWTError:
+        return None
 
 
 class WebSocketManager:
@@ -25,9 +39,20 @@ class WebSocketManager:
         # Simplified architecture: stateless manager
         pass
 
-    async def connect(self, websocket: WebSocket, task_id: str):
-        """Alias for handle_task_logs to match main.py usage"""
-        await self.handle_task_logs(websocket, task_id)
+    async def connect(self, websocket: WebSocket, task_id: str, last_id: str = "0"):
+        """Accept WebSocket connection with optional token authentication."""
+        # Extract token from query params for auth
+        token = websocket.query_params.get("token")
+        if token:
+            user_id = verify_ws_token(token)
+            if not user_id:
+                await websocket.close(code=4001, reason="Invalid token")
+                return
+        else:
+            # Allow unauthenticated in dev; log warning
+            logger.warning(f"WebSocket connection without token for task={task_id}")
+        
+        await self.handle_task_logs(websocket, task_id, last_id=last_id)
     
     async def handle_task_logs(
         self, 
@@ -58,19 +83,20 @@ class WebSocketManager:
         
         try:
             # Phase 1: Catch-up on missed messages (if reconnecting)
+            resume_id = "$"
             if last_id != "0" and last_id != "$":
-                await self._send_catchup_messages(
+                resume_id = await self._send_catchup_messages(
                     websocket, redis, stream_key, last_id
                 )
             elif last_id == "0":
                 # Client wants all historical messages
-                await self._send_all_messages(
+                resume_id = await self._send_all_messages(
                     websocket, redis, stream_key
                 )
             
-            # Phase 2: Stream real-time messages
+            # Phase 2: Stream real-time messages from where history left off
             await self._stream_realtime_messages(
-                websocket, redis, stream_key
+                websocket, redis, stream_key, resume_id
             )
             
         except WebSocketDisconnect:
@@ -126,78 +152,113 @@ class WebSocketManager:
         redis: Redis, 
         stream_key: str, 
         last_id: str
-    ):
+    ) -> str:
         """
         Send messages client missed during disconnection.
         Reads from Redis Stream starting after last_id.
+        Returns the last message ID sent (for seamless real-time resume).
         """
         logger.info(f"Sending catch-up messages after {last_id} from {stream_key}")
+        cursor = last_id
+        total_sent = 0
         
         try:
-            # Read up to 100 missed messages
-            messages = await redis.xread(
-                {stream_key: last_id}, 
-                count=100, 
-                block=0  # Don't block, return immediately
-            )
-            
-            if messages:
+            while True:
+                messages = await redis.xread(
+                    {stream_key: cursor}, 
+                    count=200, 
+                    block=0  # Don't block, return immediately
+                )
+                
+                if not messages:
+                    break
+                    
                 stream_name, msg_list = messages[0]
-                logger.info(f"Sending {len(msg_list)} catch-up messages")
+                if not msg_list:
+                    break
                 
                 for msg_id, data in msg_list:
                     await self._send_redis_message(websocket, msg_id, data)
-            else:
-                logger.info("No catch-up messages to send")
+                    cursor = msg_id
+                
+                total_sent += len(msg_list)
+                
+                # If we got fewer than requested, we've reached the end
+                if len(msg_list) < 200:
+                    break
+            
+            logger.info(f"Sent {total_sent} catch-up messages")
                 
         except Exception as e:
             logger.error(f"Error sending catch-up messages: {e}", exc_info=True)
+        
+        return cursor
     
     async def _send_all_messages(
         self, 
         websocket: WebSocket, 
         redis: Redis, 
         stream_key: str
-    ):
+    ) -> str:
         """
         Send all messages from stream beginning.
         Used when client connects for first time (last_id="0").
+        Paginates through the entire stream.
+        Returns the last message ID sent (for seamless real-time resume).
         """
         logger.info(f"Sending all historical messages from {stream_key}")
+        cursor = "0"
+        total_sent = 0
         
         try:
-            # Read from beginning, up to 100 messages
-            messages = await redis.xread(
-                {stream_key: "0"}, 
-                count=100, 
-                block=0
-            )
-            
-            if messages:
+            while True:
+                messages = await redis.xread(
+                    {stream_key: cursor}, 
+                    count=200, 
+                    block=0
+                )
+                
+                if not messages:
+                    break
+                    
                 stream_name, msg_list = messages[0]
-                logger.info(f"Sending {len(msg_list)} historical messages")
+                if not msg_list:
+                    break
                 
                 for msg_id, data in msg_list:
                     await self._send_redis_message(websocket, msg_id, data)
-            else:
-                logger.info("No historical messages in stream")
+                    cursor = msg_id
+                
+                total_sent += len(msg_list)
+                
+                # If we got fewer than requested, we've reached the end
+                if len(msg_list) < 200:
+                    break
+            
+            logger.info(f"Sent {total_sent} historical messages")
                 
         except Exception as e:
             logger.error(f"Error sending historical messages: {e}", exc_info=True)
+        
+        return cursor
     
     async def _stream_realtime_messages(
         self, 
         websocket: WebSocket, 
         redis: Redis, 
-        stream_key: str
+        stream_key: str,
+        resume_from: str = "$"
     ):
         """
         Stream new messages as they arrive in Redis Stream.
         Uses blocking XREAD to efficiently wait for new messages.
+        
+        Args:
+            resume_from: last message ID already sent to the client.
+                         Defaults to "$" (only new messages) when no history was sent.
         """
-        # Start reading only new messages ($ means "from now on")
-        last_id = "$"
-        logger.info(f"Starting real-time stream for {stream_key}")
+        last_id = resume_from
+        logger.info(f"Starting real-time stream for {stream_key} from {last_id}")
         
         while True:
             try:

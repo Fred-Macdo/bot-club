@@ -55,7 +55,7 @@ class IndicatorFactory:
             'ema_20': {'period': 20},
             'rsi': {'period': 14},
             'macd': {'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
-            'bollinger_bands': {'period': 20, 'std': 2},
+            'bbands': {'period': 20, 'std': 2},
             'atr': {'period': 14},
             'adx': {'period': 14},
             'obv': {},  # No parameters needed
@@ -105,7 +105,7 @@ class IndicatorFactory:
         # when mixing struct.field().over() with other grouped expressions.
         struct_expr = pl.col("close").ta.macd(fast_period, slow_period, signal_period).alias("_macd_struct")
         return ("_macd_struct", struct_expr, {
-            "macd": "macd_line",
+            "macd": "macd",
             "macdsignal": "macd_signal",
             "macdhist": "macd_hist",
         })
@@ -122,9 +122,9 @@ class IndicatorFactory:
         # Compute as struct first, then unnest to avoid Polars grouped-expression shape errors.
         struct_expr = pl.col("close").ta.bbands(period, std).alias("_bbands_struct")
         return ("_bbands_struct", struct_expr, {
-            "upperband": "upperband",
-            "middleband": "middleband",
-            "lowerband": "lowerband",
+            "upperband": "bb_upper",
+            "middleband": "bb_middle",
+            "lowerband": "bb_lower",
         })
     
     def calculate_atr(self, period):

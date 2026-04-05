@@ -22,6 +22,10 @@ celery_app.conf.task_routes = {
     'src.tasks.trading_tasks.stop_live_strategy': {'queue': 'control'}
 }
 
+# RedBeat: dynamic Beat schedules stored in Redis
+celery_app.conf.redbeat_redis_url = REDIS_URL
+celery_app.conf.beat_scheduler = 'redbeat.RedBeatScheduler'
+
 # Optional: Beat schedule for periodic tasks
 celery_app.conf.beat_schedule = {
     # Example: Check health of running strategies every minute
@@ -31,4 +35,4 @@ celery_app.conf.beat_schedule = {
     # },
 }
 
-celery_app.conf.timezone = 'UTC'
+celery_app.conf.timezone = 'US/Eastern'

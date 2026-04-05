@@ -13,7 +13,6 @@ import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any, Optional, List, Literal
-from urllib.parse import quote
 import requests
 
 logger = logging.getLogger(__name__)
@@ -70,13 +69,18 @@ class AlpacaTradingClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _position_symbol(self, symbol: str) -> str:
+        """Normalize symbol for position endpoints.
+        Alpaca positions API uses no-slash format for crypto: DOGEUSD, BTCUSD.
+        Orders API uses slash format: DOGE/USD, BTC/USD."""
+        return symbol.replace("/", "")
+
     def get_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get position for a specific symbol"""
         try:
-            # URL-encode symbol — crypto uses slash like DOGE/USD
-            encoded = quote(symbol, safe="")
+            pos_symbol = self._position_symbol(symbol)
             resp = requests.get(
-                f"{self.base_url}/v2/positions/{encoded}",
+                f"{self.base_url}/v2/positions/{pos_symbol}",
                 headers=self.headers,
             )
             if resp.status_code == 404:
@@ -91,10 +95,10 @@ class AlpacaTradingClient:
     def close_position(self, symbol: str) -> Dict[str, Any]:
         """Close entire position for a symbol via DELETE /v2/positions.
         Returns the liquidation order object."""
-        encoded = quote(symbol, safe="")
-        logger.info(f"Closing position via DELETE /v2/positions/{encoded}")
+        pos_symbol = self._position_symbol(symbol)
+        logger.info(f"Closing position via DELETE /v2/positions/{pos_symbol}")
         resp = requests.delete(
-            f"{self.base_url}/v2/positions/{encoded}",
+            f"{self.base_url}/v2/positions/{pos_symbol}",
             headers=self.headers,
         )
         if not resp.ok:

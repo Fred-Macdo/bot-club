@@ -277,7 +277,9 @@ class StrategyExecutor:
         if self.data is None or self.data.height == 0: 
             return {}
         
-        config = self.strategy.get('config', {})
+        config = self.strategy.get('config')
+        if not config:
+            config = self.strategy
         
         data_clean = self.data.rename({col: col.lower() for col in self.data.columns})
         if 'symbol' not in data_clean.columns:

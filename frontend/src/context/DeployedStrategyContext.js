@@ -1,9 +1,31 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { getTradingStatus, tradingApi, authApi, userApi, strategyApi } from '../api/Client';
 import { getWebSocketUrl } from '../utils/apiConfig';
 
 const DeployedStrategyContext = createContext();
 
+// Default state for a single mode slot
+const DEFAULT_MODE_STATE = {
+  deployedStrategy: null,
+  isDeployed: false,
+  dataProvider: 'alpaca',
+  deploymentTime: null,
+  activeTaskId: null,
+  sessionHealth: 'unknown',
+  logs: [],
+  socketStatus: 'disconnected',
+  socketError: null,
+  trades: [],
+  completedTrades: [],
+  positions: [],
+  metrics: null,
+  portfolio: null,
+  portfolioHistory: [],
+  indicatorData: {},
+  priceDataframes: {},
+};
+
+// Backwards-compatible hook (returns raw context)
 export const useDeployedStrategy = () => {
   const context = useContext(DeployedStrategyContext);
   if (!context) {
@@ -12,616 +34,653 @@ export const useDeployedStrategy = () => {
   return context;
 };
 
+// New mode-specific hook
+export const useTradingMode = (mode) => {
+  const ctx = useDeployedStrategy();
+  const ms = ctx.modeStates[mode] || DEFAULT_MODE_STATE;
+
+  return useMemo(() => ({
+    deployedStrategy: ms.deployedStrategy,
+    isDeployed: ms.isDeployed,
+    dataProvider: ms.dataProvider,
+    deploymentTime: ms.deploymentTime,
+    activeTaskId: ms.activeTaskId,
+    sessionHealth: ms.sessionHealth,
+    logs: ms.logs,
+    socketStatus: ms.socketStatus,
+    socketError: ms.socketError,
+    trades: ms.trades,
+    completedTrades: ms.completedTrades,
+    positions: ms.positions,
+    metrics: ms.metrics,
+    portfolio: ms.portfolio,
+    portfolioHistory: ms.portfolioHistory,
+    indicatorData: ms.indicatorData,
+    priceDataframes: ms.priceDataframes,
+    // Mode-aware actions
+    setDataProvider: (provider) => ctx.setModeDataProvider(mode, provider),
+    setDeploymentState: (strategy, taskId, provider, tradingMode) =>
+      ctx.setDeploymentState(strategy, taskId, provider, tradingMode || mode),
+    stopStrategy: () => ctx.stopStrategy(mode),
+    clearDeployment: () => ctx.clearDeployment(mode),
+    deployStrategy: (strategy, provider, tradingMode) =>
+      ctx.deployStrategy(strategy, provider, tradingMode || mode),
+    mode,
+  }), [ms, ctx, mode]);
+};
+
 export const DeployedStrategyProvider = ({ children }) => {
-  // Initialize state from localStorage for fast hydration on refresh
-  const getInitialState = () => {
+  // Hydrate from localStorage
+  const getInitialModeStates = () => {
+    const states = { paper: { ...DEFAULT_MODE_STATE }, live: { ...DEFAULT_MODE_STATE } };
     try {
-      const saved = localStorage.getItem('deployedStrategy');
+      const saved = localStorage.getItem('tradingModeStates');
       if (saved) {
         const parsed = JSON.parse(saved);
-        //console.log('DeployedStrategyContext: Hydrating from localStorage:', parsed);
-        return parsed;
+        for (const m of ['paper', 'live']) {
+          if (parsed[m]) {
+            states[m] = {
+              ...DEFAULT_MODE_STATE,
+              deployedStrategy: parsed[m].strategy || null,
+              isDeployed: parsed[m].isDeployed || false,
+              dataProvider: parsed[m].dataProvider || 'alpaca',
+              deploymentTime: parsed[m].deploymentTime || null,
+              activeTaskId: parsed[m].activeTaskId || null,
+            };
+          }
+        }
+        return states;
+      }
+      // Migration: read old single-mode localStorage
+      const oldSaved = localStorage.getItem('deployedStrategy');
+      if (oldSaved) {
+        const parsed = JSON.parse(oldSaved);
+        const oldMode = parsed.mode || 'paper';
+        states[oldMode] = {
+          ...DEFAULT_MODE_STATE,
+          deployedStrategy: parsed.strategy || null,
+          isDeployed: parsed.isDeployed || false,
+          dataProvider: parsed.dataProvider || 'alpaca',
+          deploymentTime: parsed.deploymentTime || null,
+          activeTaskId: parsed.activeTaskId || null,
+        };
+        localStorage.removeItem('deployedStrategy');
       }
     } catch (e) {
       console.error('DeployedStrategyContext: Error parsing localStorage:', e);
     }
-    return null;
+    return states;
   };
 
-  const initialState = getInitialState();
-  
-  const [deployedStrategy, setDeployedStrategy] = useState(initialState?.strategy || null);
-  const [isDeployed, setIsDeployed] = useState(initialState?.isDeployed || false);
-  const [dataProvider, setDataProvider] = useState(initialState?.dataProvider || 'alpaca');
-  const [mode, setMode] = useState(initialState?.mode || 'paper'); // Track 'paper' or 'live'
-  const [deploymentTime, setDeploymentTime] = useState(initialState?.deploymentTime || null);
+  const [modeStates, setModeStates] = useState(getInitialModeStates);
 
-  // --- Socket State (Moved from useTradingSocket) ---
-  const [logs, setLogs] = useState([]);
-  const [socketStatus, setSocketStatus] = useState('disconnected');
-  const [socketError, setSocketError] = useState(null);
-  const [trades, setTrades] = useState([]);
-  const [completedTrades, setCompletedTrades] = useState([]);
-  const [positions, setPositions] = useState([]);
-  const [metrics, setMetrics] = useState(null);
-  const [portfolio, setPortfolio] = useState(null); // Current portfolio state
-  const [portfolioHistory, setPortfolioHistory] = useState([]); // History of portfolio snapshots
-  const [indicatorData, setIndicatorData] = useState({}); // { symbol: { columns, rows } }
-  
-  // Track the current task ID for WebSocket connection - also hydrate from localStorage
-  const [activeTaskId, setActiveTaskId] = useState(initialState?.activeTaskId || null);
-  
-  const webSocket = useRef(null);
+  // Per-mode WebSocket refs
+  const wsRefs = useRef({ paper: null, live: null });
+  const lastMessageIdRefs = useRef({ paper: null, live: null });
+  const isDeployedRefs = useRef({
+    paper: modeStates.paper.isDeployed,
+    live: modeStates.live.isDeployed,
+  });
 
-  // Use a ref to track isDeployed state for access inside async callbacks
-  const isDeployedRef = useRef(isDeployed);
   useEffect(() => {
-    isDeployedRef.current = isDeployed;
-  }, [isDeployed]);
+    isDeployedRefs.current.paper = modeStates.paper.isDeployed;
+    isDeployedRefs.current.live = modeStates.live.isDeployed;
+  }, [modeStates.paper.isDeployed, modeStates.live.isDeployed]);
 
-  // Listener for re-login events to trigger reconnection
-  useEffect(() => {
-    const handleLogin = () => {
-      console.log("DeployedStrategyContext: Auth login detected, re-checking sessions...");
-      // Re-run the active session check
-      checkActiveSessions();
-    };
+  // Mode state updater helper
+  const updateModeState = useCallback((mode, updates) => {
+    setModeStates(prev => ({
+      ...prev,
+      [mode]: { ...prev[mode], ...updates },
+    }));
+  }, []);
 
-    window.addEventListener('auth:login', handleLogin);
-    return () => window.removeEventListener('auth:login', handleLogin);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const appendToModeArray = useCallback((mode, field, item, maxLen) => {
+    setModeStates(prev => {
+      const arr = prev[mode][field];
+      return {
+        ...prev,
+        [mode]: { ...prev[mode], [field]: [...arr.slice(-(maxLen - 1)), item] },
+      };
+    });
+  }, []);
 
-  // Helper to check sessions (moved out of useEffect to be reusable)
-  const checkActiveSessions = async () => {
-      if (!authApi.isAuthenticated()) {
-        console.log("DeployedStrategyContext: User not authenticated, checking if we should preserve state.");
-        if (isDeployed) {
-           console.log("DeployedStrategyContext: Preserving deployment state despite auth logout. Will reconnect on login.");
+  // Process WebSocket message for a mode
+  const processMessage = useCallback((mode, message) => {
+    const outerType = message.type;
+    const payload = message.data || message;
+    const eventType = payload.event_type || outerType;
+
+    if (outerType === 'heartbeat' || outerType === 'connection') return;
+
+    switch (eventType) {
+      case 'log':
+      case 'trading_log':
+        appendToModeArray(mode, 'logs', payload, 500);
+        break;
+
+      case 'positions':
+        appendToModeArray(mode, 'logs', payload, 500);
+        if (payload.data?.positions && Array.isArray(payload.data.positions)) {
+          updateModeState(mode, { positions: payload.data.positions });
         }
-        return;
-      }
-      
-      try {
-        const userProfile = await userApi.getProfile();
-        const userId = userProfile.id || userProfile._id || userProfile.user_id; 
-        
-        console.log(`DeployedStrategyContext: Checking active sessions for user: ${userId}`);
-        const response = await tradingApi.getActiveSessions(userId);
-        console.log('DeployedStrategyContext: Active sessions response:', response);
+        break;
 
-        if (response.active_sessions && response.active_sessions.length > 0) {
-           const session = response.active_sessions[0];
-           console.log("DeployedStrategyContext: Found active session, reconnecting:", session);
-           
-           if (isDeployed && activeTaskId) {
-             if (session.task_id && session.task_id !== activeTaskId) {
-               console.log(`DeployedStrategyContext: Updating task_id from ${activeTaskId} to ${session.task_id}`);
-               setActiveTaskId(session.task_id);
-             } else {
-               console.log("DeployedStrategyContext: Already have correct task_id, WebSocket should connect.");
-             }
-           } else {
-             // No localStorage state, or missing task_id - do full setup
-             let strategy;
-             try {
-               strategy = await strategyApi.getStrategy(session.strategy_id);
-               if (strategy && !strategy.id && strategy._id) {
-                 strategy.id = strategy._id;
-               }
-             } catch (e) {
-               console.error("DeployedStrategyContext: Failed to fetch strategy details for active session", e);
-               strategy = { 
-                 id: session.strategy_id, 
-                 name: session.strategy_name || "Unknown Strategy",
-                 active: true
-               };
-             }
-             
-             // Hydrate state from backend session
-             const provider = session.config?.data_provider || 'alpaca';
-             const mode = session.config?.mode || 'paper';
-             
-             // Use public setDeploymentState logic manually here to avoid circular dep or issues
-             // setDeploymentState cannot be called during render, but we are in async callback here
-             setDeployedStrategy(strategy);
-             setIsDeployed(true);
-             setActiveTaskId(session.task_id); // Set task ID for WS connection
-             setMode(mode);
-             setDataProvider(provider);
-             // Timestamp from session might be ISO string
-             setDeploymentTime(session.started_at ? new Date(session.started_at).getTime() : Date.now());
-             
-             // Load saved portfolio state from session details so UI isn't empty on reconnect
-             try {
-               const sessionDetails = await tradingApi.getSessionDetails(session.strategy_id, userId);
-               if (sessionDetails?.portfolio) {
-                 const pData = sessionDetails.portfolio;
-                 // Restore positions from lots
-                 if (pData.lots && typeof pData.lots === 'object') {
-                   const allLots = [];
-                   for (const [symbol, lots] of Object.entries(pData.lots)) {
-                     if (Array.isArray(lots)) {
-                       lots.forEach(lot => allLots.push({
-                         ...lot,
-                         symbol: lot.symbol || symbol,
-                         quantity: parseFloat(lot.quantity) || 0,
-                         entry_price: parseFloat(lot.entry_price) || 0,
-                         cost_basis: parseFloat(lot.cost_basis) || 0,
-                       }));
-                     }
-                   }
-                   if (allLots.length > 0) setPositions(allLots);
-                 }
-                 // Restore completed trades
-                 if (pData.completed_trades && Array.isArray(pData.completed_trades)) {
-                   setCompletedTrades(pData.completed_trades);
-                 }
-                 // Restore performance metrics
-                 if (pData.performance) {
-                   setMetrics({
-                     totalPnL: parseFloat(pData.performance.total_pnl) || 0,
-                     totalTrades: pData.performance.total_trades || 0,
-                     winningTrades: pData.performance.winning_trades || 0,
-                     losingTrades: pData.performance.losing_trades || 0,
-                     winRate: parseFloat(pData.performance.win_rate) || 0,
-                   });
-                 }
-                 console.log("DeployedStrategyContext: Restored portfolio state from session.");
-               }
-             } catch (portfolioErr) {
-               console.warn("DeployedStrategyContext: Could not restore portfolio from session:", portfolioErr);
-             }
-           }
+      case 'account_value':
+        appendToModeArray(mode, 'logs', payload, 500);
+        if (payload.data?.account_value !== undefined) {
+          const acctVal = parseFloat(payload.data.account_value) || 0;
+          const cashVal = parseFloat(payload.data.cash) || 0;
+          setModeStates(prev => ({
+            ...prev,
+            [mode]: {
+              ...prev[mode],
+              metrics: { ...(prev[mode].metrics || {}), accountValue: acctVal },
+              portfolioHistory: [...prev[mode].portfolioHistory.slice(-299), {
+                timestamp: payload.timestamp || Date.now(),
+                total_value: acctVal, cash: cashVal,
+                unrealized_pnl: 0, realized_pnl: 0,
+              }],
+            },
+          }));
+        }
+        break;
 
-        } else {
-            console.log("DeployedStrategyContext: No active sessions found on backend.");
-            // If backend says no session, but we thought we were deployed, then we should clear.
-            // This handles the case where the task died while we were logged out.
-            if (isDeployed) {
-              console.log("DeployedStrategyContext: Clearing stale deployment state - backend has no session.");
-              setIsDeployed(false);
-              setActiveTaskId(null);
-              setDeployedStrategy(null);
-              localStorage.removeItem('deployedStrategy');
+      case 'portfolio_snapshot':
+        appendToModeArray(mode, 'logs', payload, 500);
+        if (payload.data) {
+          const pData = payload.data;
+          const updates = {};
+          if (pData.lots && typeof pData.lots === 'object') {
+            const allLots = [];
+            for (const [symbol, lots] of Object.entries(pData.lots)) {
+              if (Array.isArray(lots)) {
+                lots.forEach(lot => allLots.push({
+                  ...lot, symbol: lot.symbol || symbol,
+                  quantity: parseFloat(lot.quantity) || 0,
+                  entry_price: parseFloat(lot.entry_price) || 0,
+                  cost_basis: parseFloat(lot.cost_basis) || 0,
+                }));
+              }
             }
+            if (allLots.length > 0) updates.positions = allLots;
+          }
+          if (pData.performance) {
+            setModeStates(prev => ({
+              ...prev,
+              [mode]: {
+                ...prev[mode],
+                ...updates,
+                metrics: {
+                  ...(prev[mode].metrics || {}),
+                  totalPnL: parseFloat(pData.performance.total_pnl) || 0,
+                  totalTrades: pData.performance.total_trades || 0,
+                  winningTrades: pData.performance.winning_trades || 0,
+                  losingTrades: pData.performance.losing_trades || 0,
+                  winRate: parseFloat(pData.performance.win_rate) || 0,
+                },
+              },
+            }));
+          } else if (Object.keys(updates).length > 0) {
+            updateModeState(mode, updates);
+          }
         }
-      } catch (err) {
-        console.error("DeployedStrategyContext: Error checking active sessions:", err);
+        break;
+
+      case 'price_dataframe': {
+        appendToModeArray(mode, 'logs', payload, 500);
+        const dfPayload = payload.data || {};
+        const dfRows = dfPayload.data;
+        if (Array.isArray(dfRows) && dfRows.length > 0) {
+          const titleMatch = (dfPayload.title || '').match(/Technical Indicators for (.+)/);
+          const dfSymbol = titleMatch ? titleMatch[1].trim() : (dfRows[0].symbol || 'UNKNOWN');
+
+          setModeStates(prev => {
+            const prevPdf = prev[mode].priceDataframes;
+            const existingPdf = prevPdf[dfSymbol] || [];
+            const mergedPdf = [...existingPdf, ...dfRows].slice(-100);
+            return {
+              ...prev,
+              [mode]: {
+                ...prev[mode],
+                priceDataframes: { ...prevPdf, [dfSymbol]: mergedPdf },
+              },
+            };
+          });
+        }
+        break;
       }
-    };
 
-  // Initial check on mount
-  useEffect(() => {
-    checkActiveSessions();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      case 'exit_conditions':
+        appendToModeArray(mode, 'logs', payload, 500);
+        break;
 
+      case 'portfolio_update':
+      case 'portfolio_update_event':
+        setModeStates(prev => {
+          const updates = { portfolio: payload };
+          if (payload.lots && Array.isArray(payload.lots)) updates.positions = payload.lots;
+          if (payload.completed_trades && Array.isArray(payload.completed_trades)) updates.completedTrades = payload.completed_trades;
+          if (payload.performance) {
+            updates.metrics = {
+              totalPnL: parseFloat(payload.performance.total_pnl) || 0,
+              unrealizedPnL: parseFloat(payload.performance.unrealized_pnl) || 0,
+              totalTrades: payload.performance.total_trades || 0,
+              winningTrades: payload.performance.winning_trades || 0,
+              losingTrades: payload.performance.losing_trades || 0,
+              winRate: parseFloat(payload.performance.win_rate) || 0,
+              accountValue: parseFloat(payload.total_value || payload.current_cash) || 0,
+              totalReturnPct: parseFloat(payload.performance.total_return_pct) || 0,
+            };
+          }
+          updates.portfolioHistory = [...prev[mode].portfolioHistory.slice(-299), {
+            timestamp: payload.timestamp || Date.now(),
+            unrealized_pnl: parseFloat(payload.performance?.unrealized_pnl) || 0,
+            realized_pnl: parseFloat(payload.performance?.total_pnl) || 0,
+            total_value: parseFloat(payload.total_value || payload.current_cash) || 0,
+          }];
+          return { ...prev, [mode]: { ...prev[mode], ...updates } };
+        });
+        break;
 
-  // --- WebSocket Logic ---
-  useEffect(() => {
-    // Only connect if deployed and we have a task ID (preferred) or strategy ID
-    // If activeTaskId is set (from active session check), use it. 
-    // Otherwise fallback to strategy ID if task ID not available? 
-    // BUT backend now expects task_id. If we start a new strategy, we need to know the task_id.
-    // The deployStrategy function needs to capture the task_id from the response?
-    // Let's assume activeTaskId is critical now.
-    
-    if (!isDeployed || (!activeTaskId && !deployedStrategy?.id)) {
-      if (webSocket.current) {
-        webSocket.current.close(1000, "Component unmounting or stopped");
-        webSocket.current = null;
-      }
+      case 'position_opened':
+        if (payload.lot) {
+          setModeStates(prev => {
+            const exists = prev[mode].positions.some(p => p.lot_id === payload.lot.lot_id);
+            if (exists) return prev;
+            return {
+              ...prev,
+              [mode]: {
+                ...prev[mode],
+                positions: [...prev[mode].positions, payload.lot],
+                logs: [...prev[mode].logs.slice(-499), {
+                  event_type: 'log', level: 'INFO',
+                  message: `Position opened: ${payload.lot?.symbol || 'unknown'} qty=${payload.lot?.quantity || 0}`,
+                  timestamp: payload.timestamp || Date.now(),
+                }],
+              },
+            };
+          });
+        }
+        break;
+
+      case 'trade_completed':
+      case 'trade_update':
+        if (payload.trade) {
+          setModeStates(prev => {
+            const exists = prev[mode].completedTrades.some(t =>
+              t.trade_id === payload.trade.trade_id || t.lot_id === payload.trade.lot_id
+            );
+            if (exists) return prev;
+            return {
+              ...prev,
+              [mode]: {
+                ...prev[mode],
+                completedTrades: [...prev[mode].completedTrades, payload.trade],
+                positions: payload.trade.lot_id
+                  ? prev[mode].positions.filter(p => p.lot_id !== payload.trade.lot_id)
+                  : prev[mode].positions,
+              },
+            };
+          });
+        }
+        break;
+
+      case 'equity_update':
+        setModeStates(prev => ({
+          ...prev,
+          [mode]: {
+            ...prev[mode],
+            portfolioHistory: [...prev[mode].portfolioHistory.slice(-299), {
+              timestamp: payload.timestamp || Date.now(),
+              total_value: parseFloat(payload.total_value) || 0,
+              cash: parseFloat(payload.cash) || 0,
+              positions_value: parseFloat(payload.positions_value) || 0,
+              unrealized_pnl: 0, realized_pnl: 0,
+            }],
+          },
+        }));
+        break;
+
+      case 'position_update':
+        if (payload.positions) updateModeState(mode, { positions: payload.positions });
+        break;
+
+      case 'metrics_update':
+        if (payload.metrics) {
+          setModeStates(prev => ({
+            ...prev,
+            [mode]: { ...prev[mode], metrics: { ...(prev[mode].metrics || {}), ...payload.metrics } },
+          }));
+        }
+        break;
+
+      case 'indicator_values':
+        if (payload.symbol && payload.columns && payload.rows) {
+          setModeStates(prev => ({
+            ...prev,
+            [mode]: {
+              ...prev[mode],
+              indicatorData: {
+                ...prev[mode].indicatorData,
+                [payload.symbol]: { columns: payload.columns, rows: payload.rows, timestamp: payload.timestamp || Date.now() },
+              },
+            },
+          }));
+        }
+        break;
+
+      case 'status':
+        console.log(`[${mode}] Task status:`, payload);
+        break;
+
+      default:
+        console.log(`[${mode}] Unhandled event type:`, eventType, payload);
+        appendToModeArray(mode, 'logs', {
+          event_type: 'log', level: 'DEBUG',
+          message: JSON.stringify(payload),
+          timestamp: new Date().toISOString(),
+        }, 500);
+    }
+  }, [updateModeState, appendToModeArray]);
+
+  // WebSocket connection for a single mode
+  const connectWebSocket = useCallback((mode, taskId, strategyId) => {
+    const connectionId = taskId || strategyId;
+    if (!connectionId) {
+      console.warn(`[${mode}] No connection ID for WebSocket`);
       return;
     }
 
-    // We prefer activeTaskId if available, otherwise strategyId (legacy behavior or if task ID missing)
-    // But backend route is /ws/trading/{task_id}. We MUST provide a task ID if that's what backend expects.
-    // However, if we just started trading, where do we get task_id?
-    // We need to update deployStrategy to set it.
-    
-    // Prefer activeTaskId. If not available, we might fail to connect if backend requires task_id.
-    // But for legacy support or race conditions, we check.
-    if (!activeTaskId) {
-        console.warn("DeployedStrategyContext: No active task ID found for WebSocket. Connection might fail if backend requires task_id.");
-    }
-    
-    const connectionId = activeTaskId || deployedStrategy?.id;
-    
-    // Avoid reconnecting if already connected to the same ID
     const wsBaseUrl = getWebSocketUrl();
-    console.log("DeployedStrategyContext: WebSocket base URL:", wsBaseUrl);
-    // Update to match backend route: /ws/task/{task_id}
-    const wsUrl = `${wsBaseUrl}/ws/task/${connectionId}`;
+    const baseWsUrl = wsBaseUrl + '/ws/task/' + connectionId;
+    // On first connect use "0" (all history); on reconnect resume from last received ID
+    const getWsUrl = () => {
+      const lastId = lastMessageIdRefs.current[mode];
+      return lastId ? `${baseWsUrl}?last_id=${encodeURIComponent(lastId)}` : baseWsUrl;
+    };
+    const wsUrl = getWsUrl();
 
-    if (webSocket.current && webSocket.current.url === wsUrl && webSocket.current.readyState === WebSocket.OPEN) {
-        return;
+    // Skip if already connected to same URL
+    if (wsRefs.current[mode]?.readyState === WebSocket.OPEN) {
+      return;
     }
-    
-    // Close existing if different
-    if (webSocket.current) {
-        webSocket.current.close(1000, "Switching connection");
+
+    // Close existing
+    if (wsRefs.current[mode]) {
+      wsRefs.current[mode].close(1000, 'Switching connection');
     }
-    
+
     let reconnectTimeout = null;
 
-    const connectSocket = () => {
-        console.log(`Connecting socket for ID: ${connectionId}`);
-        const ws = new WebSocket(wsUrl);
-        console.log("DeployedStrategyContext: WebSocket URL:", wsUrl);
-        webSocket.current = ws;
+    const doConnect = () => {
+      const url = getWsUrl();
+      console.log(`[${mode}] Connecting WebSocket to ${url}`);
+      const ws = new WebSocket(url);
+      wsRefs.current[mode] = ws;
 
-        ws.onopen = () => {
-          console.log('WebSocket connected');
-          setSocketStatus('connected');
-          setSocketError(null);
-        };
+      ws.onopen = () => {
+        console.log(`[${mode}] WebSocket connected`);
+        updateModeState(mode, { socketStatus: 'connected', socketError: null });
+      };
 
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            
-            // Messages arrive as { id, type, data: { event_type, ... } }
-            // The actual payload is in message.data, and event_type is inside the payload
-            const outerType = message.type;
-            const payload = message.data || message;
-            const eventType = payload.event_type || outerType;
-            
-            // Skip non-data messages
-            if (outerType === 'heartbeat' || outerType === 'connection') return;
-            
-            switch (eventType) {
-              // --- Log-type events (display in TradingLogs via LogRenderer) ---
-              case 'log':
-              case 'trading_log':
-                setLogs(prev => [...prev.slice(-499), payload]);
-                break;
-                
-              case 'positions':
-                // Add to logs for LogRenderer display
-                setLogs(prev => [...prev.slice(-499), payload]);
-                // Also extract structured positions data for Positions component
-                if (payload.data && payload.data.positions && Array.isArray(payload.data.positions)) {
-                  setPositions(payload.data.positions);
-                }
-                break;
-                
-              case 'account_value':
-                // Add to logs for LogRenderer display
-                setLogs(prev => [...prev.slice(-499), payload]);
-                // Also extract structured account value for metrics and equity chart
-                if (payload.data && payload.data.account_value !== undefined) {
-                  const acctVal = parseFloat(payload.data.account_value) || 0;
-                  const cashVal = parseFloat(payload.data.cash) || 0;
-                  setMetrics(prev => ({
-                    ...(prev || {}),
-                    accountValue: acctVal,
-                  }));
-                  // Add equity data point for charting
-                  setPortfolioHistory(prev => [...prev.slice(-299), {
-                    timestamp: payload.timestamp || Date.now(),
-                    total_value: acctVal,
-                    cash: cashVal,
-                    unrealized_pnl: 0,
-                    realized_pnl: 0,
-                  }]);
-                }
-                break;
-
-              case 'portfolio_snapshot':
-                // Add to logs for PortfolioSnapshotLog renderer
-                setLogs(prev => [...prev.slice(-499), payload]);
-                // Also extract portfolio data to populate state
-                if (payload.data) {
-                  const pData = payload.data;
-                  // Extract positions from lots (dict of symbol -> lots[])
-                  if (pData.lots && typeof pData.lots === 'object') {
-                    const allLots = [];
-                    for (const [symbol, lots] of Object.entries(pData.lots)) {
-                      if (Array.isArray(lots)) {
-                        lots.forEach(lot => allLots.push({
-                          ...lot,
-                          symbol: lot.symbol || symbol,
-                          quantity: parseFloat(lot.quantity) || 0,
-                          entry_price: parseFloat(lot.entry_price) || 0,
-                          cost_basis: parseFloat(lot.cost_basis) || 0,
-                        }));
-                      }
-                    }
-                    if (allLots.length > 0) {
-                      setPositions(allLots);
-                    }
-                  }
-                  // Extract performance metrics
-                  if (pData.performance) {
-                    setMetrics(prev => ({
-                      ...(prev || {}),
-                      totalPnL: parseFloat(pData.performance.total_pnl) || 0,
-                      totalTrades: pData.performance.total_trades || 0,
-                      winningTrades: pData.performance.winning_trades || 0,
-                      losingTrades: pData.performance.losing_trades || 0,
-                      winRate: parseFloat(pData.performance.win_rate) || 0,
-                    }));
-                  }
-                }
-                break;
-
-              case 'price_dataframe':
-              case 'exit_conditions':
-                // These are display-only log events rendered by LogRenderer
-                setLogs(prev => [...prev.slice(-499), payload]);
-                break;
-                
-              // --- Portfolio update from persistence layer ---
-              case 'portfolio_update':
-              case 'portfolio_update_event':
-                setPortfolio(payload);
-                
-                // Extract positions from lots
-                if (payload.lots && Array.isArray(payload.lots)) {
-                  setPositions(payload.lots);
-                }
-                
-                // Extract completed trades
-                if (payload.completed_trades && Array.isArray(payload.completed_trades)) {
-                  setCompletedTrades(payload.completed_trades);
-                }
-                
-                // Extract performance metrics
-                if (payload.performance) {
-                  setMetrics({
-                    totalPnL: parseFloat(payload.performance.total_pnl) || 0,
-                    unrealizedPnL: parseFloat(payload.performance.unrealized_pnl) || 0,
-                    totalTrades: payload.performance.total_trades || 0,
-                    winningTrades: payload.performance.winning_trades || 0,
-                    losingTrades: payload.performance.losing_trades || 0,
-                    winRate: parseFloat(payload.performance.win_rate) || 0,
-                    accountValue: parseFloat(payload.total_value || payload.current_cash) || 0,
-                    totalReturnPct: parseFloat(payload.performance.total_return_pct) || 0,
-                  });
-                }
-                
-                // Add to portfolio history for charting
-                setPortfolioHistory(prev => [...prev.slice(-299), {
-                  timestamp: payload.timestamp || Date.now(),
-                  unrealized_pnl: parseFloat(payload.performance?.unrealized_pnl) || 0,
-                  realized_pnl: parseFloat(payload.performance?.total_pnl) || 0,
-                  total_value: parseFloat(payload.total_value || payload.current_cash) || 0,
-                }]);
-                break;
-              
-              // --- Position opened from persistence layer ---
-              case 'position_opened':
-                if (payload.lot) {
-                  setPositions(prev => {
-                    const exists = prev.some(p => p.lot_id === payload.lot.lot_id);
-                    if (exists) return prev;
-                    return [...prev, payload.lot];
-                  });
-                }
-                // Also add as a log entry
-                setLogs(prev => [...prev.slice(-499), {
-                  event_type: 'log',
-                  level: 'INFO',
-                  message: `Position opened: ${payload.lot?.symbol || 'unknown'} qty=${payload.lot?.quantity || 0}`,
-                  timestamp: payload.timestamp || Date.now()
-                }]);
-                break;
-                
-              // --- Trade completed from persistence layer ---
-              case 'trade_completed':
-              case 'trade_update':
-                if (payload.trade) {
-                  setCompletedTrades(prev => {
-                    const exists = prev.some(t => 
-                      t.trade_id === payload.trade.trade_id || 
-                      t.lot_id === payload.trade.lot_id
-                    );
-                    if (exists) return prev;
-                    return [...prev, payload.trade];
-                  });
-                  // Remove the closed lot from positions
-                  if (payload.trade.lot_id) {
-                    setPositions(prev => prev.filter(p => p.lot_id !== payload.trade.lot_id));
-                  }
-                }
-                break;
-              
-              // --- Equity curve update from persistence layer ---
-              case 'equity_update':
-                setPortfolioHistory(prev => [...prev.slice(-299), {
-                  timestamp: payload.timestamp || Date.now(),
-                  total_value: parseFloat(payload.total_value) || 0,
-                  cash: parseFloat(payload.cash) || 0,
-                  positions_value: parseFloat(payload.positions_value) || 0,
-                  unrealized_pnl: 0,
-                  realized_pnl: 0,
-                }]);
-                break;
-                
-              case 'position_update':
-                if (payload.positions) {
-                  setPositions(payload.positions);
-                }
-                break;
-                
-              case 'metrics_update':
-                if (payload.metrics) {
-                  setMetrics(prev => ({ ...prev, ...payload.metrics }));
-                }
-                break;
-                
-              case 'indicator_values':
-                // Structured indicator time-series for charting
-                if (payload.symbol && payload.columns && payload.rows) {
-                  setIndicatorData(prev => ({
-                    ...prev,
-                    [payload.symbol]: {
-                      columns: payload.columns,
-                      rows: payload.rows,
-                      timestamp: payload.timestamp || Date.now(),
-                    }
-                  }));
-                }
-                break;
-
-              case 'status':
-                // Task status events (started, completed, error)
-                console.log('Task status:', payload);
-                break;
-                
-              default:
-                console.log('Unhandled event type:', eventType, payload);
-                setLogs(prev => [...prev.slice(-499), { 
-                  event_type: 'log',
-                  level: 'DEBUG', 
-                  message: JSON.stringify(payload),
-                  timestamp: new Date().toISOString()
-                }]);
-            }
-          } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          // Track last message ID for reconnection catch-up
+          if (msg.id) {
+            lastMessageIdRefs.current[mode] = msg.id;
           }
-        };
+          processMessage(mode, msg);
+        } catch (error) {
+          console.error(`[${mode}] Error parsing WebSocket message:`, error);
+        }
+      };
 
-        ws.onerror = (err) => {
-          console.error('WebSocket error:', err);
-          setSocketError('WebSocket connection failed');
-          setSocketStatus('error');
-        };
+      ws.onerror = () => {
+        updateModeState(mode, { socketError: 'WebSocket connection failed', socketStatus: 'error' });
+      };
 
-        ws.onclose = (event) => {
-          console.log('WebSocket disconnected', event.code, event.reason);
-          setSocketStatus('disconnected');
-          
-          // Attempt reconnect if not closed cleanly and we are still deployed
-          // Use Ref to check current state, bypassing closure staleness
-          if (isDeployedRef.current && event.code !== 1000) {
-              console.log("Attempting to reconnect in 3s...");
-              reconnectTimeout = setTimeout(() => {
-                  // Double check state before reconnecting
-                  if (isDeployedRef.current) {
-                      connectSocket();
-                  }
-              }, 3000);
-          }
-        };
+      ws.onclose = (event) => {
+        console.log(`[${mode}] WebSocket disconnected`, event.code, event.reason);
+        updateModeState(mode, { socketStatus: 'disconnected' });
+        if (isDeployedRefs.current[mode] && event.code !== 1000) {
+          console.log(`[${mode}] Reconnecting in 3s...`);
+          reconnectTimeout = setTimeout(() => {
+            if (isDeployedRefs.current[mode]) doConnect();
+          }, 3000);
+        }
+      };
     };
 
-    connectSocket();
+    doConnect();
 
     return () => {
-      if (webSocket.current) {
-        webSocket.current.close(1000, "Component unmounting");
+      if (wsRefs.current[mode]) {
+        wsRefs.current[mode].close(1000, 'Cleanup');
+        wsRefs.current[mode] = null;
       }
-      if (reconnectTimeout) {
-          clearTimeout(reconnectTimeout);
-      }
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, [isDeployed, deployedStrategy?.id, deployedStrategy?._id, activeTaskId]);
+  }, [processMessage, updateModeState]);
 
-  // Save to localStorage (including activeTaskId for reconnection on refresh)
+  // WebSocket effects (one per mode)
   useEffect(() => {
-    if (deployedStrategy && isDeployed) {
-      localStorage.setItem('deployedStrategy', JSON.stringify({
-        strategy: deployedStrategy,
-        isDeployed,
-        dataProvider,
-        mode,
-        deploymentTime: deploymentTime || Date.now(),
-        activeTaskId: activeTaskId  // Save task ID for reconnection
-      }));
-    } else if (!isDeployed) {
-      localStorage.removeItem('deployedStrategy');
+    const ms = modeStates.paper;
+    if (!ms.isDeployed || (!ms.activeTaskId && !ms.deployedStrategy?.id)) {
+      if (wsRefs.current.paper) {
+        wsRefs.current.paper.close(1000, 'Not deployed');
+        wsRefs.current.paper = null;
+      }
+      return;
     }
-  }, [deployedStrategy, isDeployed, dataProvider, mode, deploymentTime, activeTaskId]);
+    const cleanup = connectWebSocket('paper', ms.activeTaskId, ms.deployedStrategy?.id);
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeStates.paper.isDeployed, modeStates.paper.activeTaskId, modeStates.paper.deployedStrategy?.id, connectWebSocket]);
 
-  const deployStrategy = (strategy, provider = 'alpaca', tradingMode = 'paper') => {
-    // Reset previous session data
-    setLogs([]);
-    setTrades([]);
-    setCompletedTrades([]);
-    setPositions([]);
-    setMetrics(null);
-    setPortfolio(null);
-    setPortfolioHistory([]);
-    
-    setDeployedStrategy(strategy);
-    setIsDeployed(true);
-    setDataProvider(provider);
-    setMode(tradingMode);
-    setDeploymentTime(Date.now());
-    
-    // NOTE: The actual API call to start trading is usually done by the component (e.g. PaperTrade.js)
-    // which then calls this function to update context state.
-    // However, we need to know the task_id here for WebSocket connection.
-    // Ideally, deployStrategy should accept task_id as an argument or we should refactor how deployment is triggered.
-    // 
-    // If the component calls `apiClient.deployStrategy` and then calls this context method,
-    // it should pass the task_id from the API response.
-  };
-
-  // New method to handle deployment with task ID
-  const setDeploymentState = (strategy, taskId, provider = 'alpaca', tradingMode = 'paper') => {
-      // Reset previous session data
-      setLogs([]);
-      setTrades([]);
-      setCompletedTrades([]);
-      setPositions([]);
-      setMetrics(null);
-      setPortfolio(null);
-      setPortfolioHistory([]);
-      
-      setDeployedStrategy(strategy);
-      setIsDeployed(true);
-      setActiveTaskId(taskId); // Set the task ID for WS
-      setDataProvider(provider);
-      setMode(tradingMode);
-      setDeploymentTime(Date.now());
-  };
-
-  const stopStrategy = () => {
-    isDeployedRef.current = false; // Immediate update to prevent race conditions in WS callbacks
-    setIsDeployed(false);
-    setActiveTaskId(null);
-    setSocketStatus('disconnected');
-    if (webSocket.current) {
-        // Explicitly close with normal closure code (1000) to prevent reconnect attempts
-        webSocket.current.close(1000, "User stopped strategy");
-        webSocket.current = null;
+  useEffect(() => {
+    const ms = modeStates.live;
+    if (!ms.isDeployed || (!ms.activeTaskId && !ms.deployedStrategy?.id)) {
+      if (wsRefs.current.live) {
+        wsRefs.current.live.close(1000, 'Not deployed');
+        wsRefs.current.live = null;
+      }
+      return;
     }
-  };
+    const cleanup = connectWebSocket('live', ms.activeTaskId, ms.deployedStrategy?.id);
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeStates.live.isDeployed, modeStates.live.activeTaskId, modeStates.live.deployedStrategy?.id, connectWebSocket]);
 
-  const clearDeployment = () => {
-    setDeployedStrategy(null);
-    setIsDeployed(false);
-    localStorage.removeItem('deployedStrategy');
-  };
+  // Restore active sessions from backend
+  const checkActiveSessions = useCallback(async () => {
+    if (!authApi.isAuthenticated()) {
+      console.log('DeployedStrategyContext: Not authenticated');
+      return;
+    }
 
-  const value = {
-    // Deployment State
-    deployedStrategy,
-    isDeployed,
-    dataProvider,
-    mode,
-    deploymentTime,
-    activeTaskId, // Export activeTaskId
+    try {
+      await userApi.getProfile();
+      const response = await tradingApi.getActiveSessions();
+      console.log('DeployedStrategyContext: Active sessions response:', response);
+
+      const activeSessions = response.active_sessions || [];
+      const modesWithSessions = new Set();
+
+      for (const session of activeSessions) {
+        const sessionMode = session.config?.mode || 'paper';
+        modesWithSessions.add(sessionMode);
+
+        let strategy;
+        try {
+          strategy = await strategyApi.getStrategy(session.strategy_id);
+          if (strategy && !strategy.id && strategy._id) strategy.id = strategy._id;
+        } catch (e) {
+          console.error('[' + sessionMode + '] Failed to fetch strategy:', e);
+          strategy = { id: session.strategy_id, name: session.strategy_name || 'Unknown Strategy', active: true };
+        }
+        if (!strategy.config && session.strategy_config) {
+          strategy.config = session.strategy_config;
+        }
+
+        const provider = session.config?.data_provider || 'alpaca';
+        const health = session.health || 'unknown';
+
+        updateModeState(sessionMode, {
+          deployedStrategy: strategy,
+          isDeployed: true,
+          activeTaskId: session.task_id,
+          dataProvider: provider,
+          sessionHealth: health,
+          deploymentTime: session.started_at ? new Date(session.started_at).getTime() : Date.now(),
+        });
+
+        // Restore portfolio state
+        try {
+          const sessionDetails = await tradingApi.getSessionDetails(session.strategy_id, sessionMode);
+          if (sessionDetails?.portfolio) {
+            const pData = sessionDetails.portfolio;
+            const updates = {};
+            if (pData.lots && typeof pData.lots === 'object') {
+              const allLots = [];
+              for (const [symbol, lots] of Object.entries(pData.lots)) {
+                if (Array.isArray(lots)) {
+                  lots.forEach(lot => allLots.push({
+                    ...lot, symbol: lot.symbol || symbol,
+                    quantity: parseFloat(lot.quantity) || 0,
+                    entry_price: parseFloat(lot.entry_price) || 0,
+                    cost_basis: parseFloat(lot.cost_basis) || 0,
+                  }));
+                }
+              }
+              if (allLots.length > 0) updates.positions = allLots;
+            }
+            if (pData.completed_trades && Array.isArray(pData.completed_trades)) {
+              updates.completedTrades = pData.completed_trades;
+            }
+            if (pData.performance) {
+              updates.metrics = {
+                totalPnL: parseFloat(pData.performance.total_pnl) || 0,
+                totalTrades: pData.performance.total_trades || 0,
+                winningTrades: pData.performance.winning_trades || 0,
+                losingTrades: pData.performance.losing_trades || 0,
+                winRate: parseFloat(pData.performance.win_rate) || 0,
+              };
+            }
+            if (Object.keys(updates).length > 0) updateModeState(sessionMode, updates);
+            console.log('[' + sessionMode + '] Restored portfolio state');
+          }
+        } catch (err) {
+          console.warn('[' + sessionMode + '] Could not restore portfolio:', err);
+        }
+      }
+
+      // Clear modes with no active session
+      for (const m of ['paper', 'live']) {
+        if (!modesWithSessions.has(m)) {
+          setModeStates(prev => {
+            if (prev[m]?.isDeployed) {
+              console.log('[' + m + '] Clearing stale deployment state');
+              return { ...prev, [m]: { ...DEFAULT_MODE_STATE } };
+            }
+            return prev;
+          });
+        }
+      }
+    } catch (err) {
+      console.error('DeployedStrategyContext: Error checking active sessions:', err);
+    }
+  }, [updateModeState]);
+
+  // Login listener
+  useEffect(() => {
+    const handleLogin = () => checkActiveSessions();
+    window.addEventListener('auth:login', handleLogin);
+    return () => window.removeEventListener('auth:login', handleLogin);
+  }, [checkActiveSessions]);
+
+  // Initial check
+  useEffect(() => {
+    checkActiveSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist to localStorage
+  useEffect(() => {
+    const toSave = {};
+    for (const m of ['paper', 'live']) {
+      const ms = modeStates[m];
+      if (ms.deployedStrategy && ms.isDeployed) {
+        toSave[m] = {
+          strategy: ms.deployedStrategy,
+          isDeployed: true,
+          dataProvider: ms.dataProvider,
+          deploymentTime: ms.deploymentTime || Date.now(),
+          activeTaskId: ms.activeTaskId,
+        };
+      }
+    }
+    if (Object.keys(toSave).length > 0) {
+      localStorage.setItem('tradingModeStates', JSON.stringify(toSave));
+    } else {
+      localStorage.removeItem('tradingModeStates');
+    }
+  }, [modeStates]);
+
+  // Actions
+  const setDeploymentState = useCallback((strategy, taskId, provider = 'alpaca', tradingMode = 'paper') => {
+    updateModeState(tradingMode, {
+      ...DEFAULT_MODE_STATE,
+      deployedStrategy: strategy,
+      isDeployed: true,
+      activeTaskId: taskId,
+      dataProvider: provider,
+      deploymentTime: Date.now(),
+    });
+  }, [updateModeState]);
+
+  const deployStrategy = useCallback((strategy, provider = 'alpaca', tradingMode = 'paper') => {
+    updateModeState(tradingMode, {
+      ...DEFAULT_MODE_STATE,
+      isDeployed: true,
+      dataProvider: provider,
+      deploymentTime: Date.now(),
+    });
+  }, [updateModeState]);
+
+  const stopStrategy = useCallback((tradingMode = 'paper') => {
+    isDeployedRefs.current[tradingMode] = false;
+    lastMessageIdRefs.current[tradingMode] = null;
+    if (wsRefs.current[tradingMode]) {
+      wsRefs.current[tradingMode].close(1000, 'User stopped strategy');
+      wsRefs.current[tradingMode] = null;
+    }
+    updateModeState(tradingMode, {
+      isDeployed: false,
+      activeTaskId: null,
+      socketStatus: 'disconnected',
+    });
+  }, [updateModeState]);
+
+  const clearDeployment = useCallback((tradingMode = 'paper') => {
+    lastMessageIdRefs.current[tradingMode] = null;
+    updateModeState(tradingMode, { ...DEFAULT_MODE_STATE });
+  }, [updateModeState]);
+
+  const setModeDataProvider = useCallback((tradingMode, provider) => {
+    updateModeState(tradingMode, { dataProvider: provider });
+  }, [updateModeState]);
+
+  // Context value
+  const value = useMemo(() => ({
+    modeStates,
+    setDeploymentState,
     deployStrategy,
     stopStrategy,
     clearDeployment,
-    setDataProvider,
-    setDeploymentState, // Export new method
-    
-    // Socket Data
-    logs,
-    socketStatus,
-    socketError,
-    trades,
-    completedTrades,
-    positions,
-    metrics,
-    portfolio,
-    portfolioHistory,
-    indicatorData,  // Indicator time-series for charting
-  };
+    setModeDataProvider,
+  }), [modeStates, setDeploymentState, deployStrategy, stopStrategy, clearDeployment, setModeDataProvider]);
 
   return (
     <DeployedStrategyContext.Provider value={value}>
@@ -629,4 +688,3 @@ export const DeployedStrategyProvider = ({ children }) => {
     </DeployedStrategyContext.Provider>
   );
 };
-

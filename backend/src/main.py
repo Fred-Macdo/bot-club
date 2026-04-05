@@ -93,13 +93,16 @@ app = FastAPI(
 # --- CORS Middleware Configuration ---
 origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+allowed_headers = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=allowed_methods,
+    allow_headers=allowed_headers,
+    expose_headers=["Content-Length", "X-Request-Id"],
 )
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
@@ -111,7 +114,8 @@ app.include_router(trading_routes.router, prefix="/api/trading", tags=["trading"
 
 @app.websocket("/ws/task/{task_id}")
 async def websocket_endpoint(websocket: WebSocket, task_id: str):
-    await websocket_manager.connect(websocket, task_id)
+    last_id = websocket.query_params.get("last_id", "0")
+    await websocket_manager.connect(websocket, task_id, last_id=last_id)
 
 @app.get("/")
 async def root():
@@ -120,9 +124,25 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for container monitoring"""
+    health = {"status": "healthy"}
+    
+    # Check MongoDB
     try:
-        # Test database connection
         await database.command("ping")
-        return {"status": "healthy", "database": "connected"}
+        health["database"] = "connected"
     except Exception as e:
-        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+        health["status"] = "unhealthy"
+        health["database"] = f"disconnected: {str(e)}"
+    
+    # Check Redis
+    try:
+        if redis_client.redis:
+            await redis_client.redis.ping()
+            health["redis"] = "connected"
+        else:
+            health["redis"] = "not initialized"
+    except Exception as e:
+        health["status"] = "unhealthy"
+        health["redis"] = f"disconnected: {str(e)}"
+    
+    return health

@@ -54,7 +54,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     working_dir: /app
-    command: celery -A src.celery_app beat --loglevel=info
+    command: celery -A src.celery_app beat -S redbeat.RedBeatScheduler --loglevel=info
     volumes:
       - ./backend:/app
     env_file:
@@ -78,7 +78,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     working_dir: /app
-    command: celery -A src.celery_app flower --port=5555
+    command: celery -A src.celery_app flower --port=5555 --basic-auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-changeme}
     ports:
       - "5555:5555"
     volumes:
@@ -130,11 +130,13 @@ services:
     environment:
       - ME_CONFIG_MONGODB_SERVER=mongo
       - ME_CONFIG_MONGODB_PORT=27017
-      - ME_CONFIG_BASICAUTH_USERNAME=admin
-      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      - ME_CONFIG_BASICAUTH_USERNAME=${ME_ADMIN_USER:-admin}
+      - ME_CONFIG_BASICAUTH_PASSWORD=${ME_ADMIN_PASSWORD:-changeme}
     depends_on:
       - mongo
     restart: unless-stopped
+    profiles:
+      - dev  # Only starts with: docker compose --profile dev up
 
   redis:
     image: redis:7-alpine

@@ -99,14 +99,26 @@ class PositionLot(BaseModel):
         description="Alpaca order ID for tracking"
     )
     
+    # Risk management — per-lot SL/TP prices calculated at entry
+    stop_loss_price: Optional[Decimal] = Field(
+        None,
+        description="Stop loss price for this lot"
+    )
+    take_profit_price: Optional[Decimal] = Field(
+        None,
+        description="Take profit price for this lot"
+    )
+    
     # Metadata
     notes: str = Field(default="", description="Notes (e.g., 'DCA entry 3')")
     entry_reason: Optional[str] = Field(None, description="Why this entry was made")
     tags: List[str] = Field(default_factory=list, description="Tags for categorization")
     
-    @field_validator('quantity', 'entry_price', 'cost_basis', mode='before')
+    @field_validator('quantity', 'entry_price', 'cost_basis', 'stop_loss_price', 'take_profit_price', mode='before')
     @classmethod
     def parse_decimal(cls, v):
+        if v is None:
+            return v
         if isinstance(v, (int, float, str)):
             return Decimal(str(v))
         return v
@@ -129,7 +141,9 @@ class PositionLot(BaseModel):
     def get_holding_period_days(self, current_time: datetime = None) -> int:
         """Calculate holding period in days"""
         current_time = current_time or datetime.now(tz=timezone.utc)
-        return (current_time - self.entry_time).days
+        entry = self.entry_time if self.entry_time.tzinfo else self.entry_time.replace(tzinfo=timezone.utc)
+        ct = current_time if current_time.tzinfo else current_time.replace(tzinfo=timezone.utc)
+        return (ct - entry).days
 
 
 
@@ -207,7 +221,9 @@ class CompletedTrade(BaseModel):
             )
         
         if self.holding_period_days is None:
-            self.holding_period_days = (self.exit_time - self.entry_time).days
+            entry = self.entry_time if self.entry_time.tzinfo else self.entry_time.replace(tzinfo=timezone.utc)
+            exit_ = self.exit_time if self.exit_time.tzinfo else self.exit_time.replace(tzinfo=timezone.utc)
+            self.holding_period_days = (exit_ - entry).days
 
 
 # ==================== ORDER EXECUTION ====================

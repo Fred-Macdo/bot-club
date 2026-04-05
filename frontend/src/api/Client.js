@@ -7,11 +7,12 @@ class ApiClient {
     const isDocker = process.env.REACT_APP_API_URL && process.env.REACT_APP_API_URL.includes('backend:');
     
     // If running in Docker, use empty string to leverage proxy
-    // Otherwise use the configured API URL or default to localhost
-    this.baseURL = isDocker ? '' : (process.env.REACT_APP_API_URL || 'http://localhost:8000');
+    // In production behind nginx, use empty string (nginx proxies /api to backend)
+    // Otherwise use the configured API URL
+    this.baseURL = isDocker ? '' : (process.env.REACT_APP_API_URL || '');
     
     // Backend services URL (for trading/backtest services)
-    this.backendServicesURL = process.env.REACT_APP_BACKEND_SERVICES_URL || 'http://localhost:8001';
+    this.backendServicesURL = process.env.REACT_APP_BACKEND_SERVICES_URL || '';
     
     this.tokenKey = 'authToken'; // Consistent token key across the application
     
@@ -360,19 +361,16 @@ export const tradingApi = {
 
   async stopTrading(strategyId, taskId) {
     console.log(`tradingApi.stopTrading() called for strategy ${strategyId}, task ${taskId}`);
-    return apiClient.post('/api/trading/stop', { strategy_id: strategyId, task_id: taskId });
+    return apiClient.post('/api/trading/stop', { strategy_id: strategyId, task_id: taskId || null });
   },
 
-  async getActiveSessions(userId) {
-    return apiClient.get(`/api/trading/active?user_id=${userId}`);
+  async getActiveSessions() {
+    return apiClient.get('/api/trading/active');
   },
 
-  async getSessionDetails(strategyId, userId) {
-    let url = `/api/trading/session/${strategyId}`;
-    if (userId) {
-      url += `?user_id=${userId}`;
-    }
-    return apiClient.get(url);
+  async getSessionDetails(strategyId, mode) {
+    const params = mode ? `?mode=${mode}` : '';
+    return apiClient.get(`/api/trading/session/${strategyId}${params}`);
   }
 };
 
@@ -414,17 +412,18 @@ export const fetchDefaultStrategies = async () => {
   }
 };
 
-export const deployStrategy = async (strategyId, mode, dataProvider, initialCapital = 100000) => {
+export const deployStrategy = async (strategyId, mode, dataProvider, initialCapital = 100000, extendedHours = false) => {
   try {
     const payload = {
       strategy_id: strategyId,
       mode: mode,
       data_provider: dataProvider,
       initial_capital: initialCapital,
+      extended_hours: extendedHours,
     };
     console.log('deployStrategy payload:', payload);
     const response = await apiClient.post('/api/trading/run', payload);
-    // Return the response data directly, which now includes task_id
+    // Return the response data directly, which now includes task_id, asset_type, schedule_name
     return { success: true, data: response }; 
   } catch (error) {
     console.error(`Error deploying ${mode} strategy:`, error);

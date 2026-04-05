@@ -364,8 +364,11 @@ class AlpacaProvider(BaseDataProvider):
         return all_data
 
     def _convert_timeframe(self, timeframe: str) -> str:
-        mapping = {'1MIN': '1Min', '5MIN': '5Min', '15MIN': '15Min', '30MIN': '30Min', '1H': '1Hour', '1D': '1Day', '1W': '1Week'}
-        return mapping.get(timeframe.upper().strip(), '1Day')
+        tf = timeframe.upper().strip()
+        mapping = TIMEFRAME_MAPPINGS.get(tf)
+        if mapping and 'alpaca' in mapping:
+            return mapping['alpaca']
+        return '1Day'
 
 class PolygonProvider(BaseDataProvider):
     """Polygon.io data provider"""

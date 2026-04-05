@@ -21,6 +21,7 @@ class TradingSessionStatus:
     STOPPED = "stopped"
     ERROR = "error"
     COMPLETED = "completed"
+    SCHEDULED = "scheduled"  # Stock strategy waiting for next market open
 
 
 class TradingSessionConfig(BaseModel):
@@ -30,6 +31,9 @@ class TradingSessionConfig(BaseModel):
     initial_capital: float = Field(default=100000.0, description="User-defined initial capital")
     timeframe: str = Field(default="15M", description="Trading timeframe")
     symbols: list[str] = Field(default_factory=list, description="Symbols being traded")
+    asset_type: str = Field(default="crypto", description="'crypto' or 'stock'")
+    extended_hours: bool = Field(default=False, description="Include pre/post-market hours for stocks")
+    schedule_name: Optional[str] = Field(default=None, description="RedBeat schedule entry name for stock strategies")
 
 
 class TradingSession(BaseModel):
@@ -56,6 +60,11 @@ class TradingSession(BaseModel):
 
     # Configuration
     config: TradingSessionConfig = Field(..., description="Session configuration")
+
+    # Full strategy configuration (indicators, conditions, risk) for UI restoration
+    strategy_config: Optional[Dict[str, Any]] = Field(
+        default=None, description="Full strategy config snapshot for session restore"
+    )
 
     # Status
     status: str = Field(

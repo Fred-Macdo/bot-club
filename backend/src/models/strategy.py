@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict, BeforeValida
 from typing_extensions import Annotated
 from bson import ObjectId
 import uuid
+
+from ..utils.asset_classifier import validate_no_mixed_assets
 # Helper for ObjectId handling
 PyObjectId = Annotated[str, BeforeValidator(str)]
 
@@ -76,9 +78,11 @@ class StrategyConfig(BaseModel):
     @field_validator('symbols')
     @classmethod
     def validate_symbols_uppercase(cls, v):
-        """Convert all symbols to uppercase"""
+        """Convert all symbols to uppercase and reject mixed crypto+stock."""
         if isinstance(v, list):
-            return [symbol.upper() if isinstance(symbol, str) else symbol for symbol in v]
+            upper = [symbol.upper() if isinstance(symbol, str) else symbol for symbol in v]
+            validate_no_mixed_assets(upper)
+            return upper
         return v
     
     @field_validator('timeframe')

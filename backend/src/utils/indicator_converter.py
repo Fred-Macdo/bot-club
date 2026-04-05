@@ -31,10 +31,16 @@ def convert_indicators_to_params(indicators: List[Dict]) -> Dict:
             params[key] = indicator_params
         elif name == 'rsi':
             params['rsi'] = indicator_params
-        elif name == 'bollinger_bands':
-            params['bollinger_bands'] = {
+        elif name in ('bollinger_bands', 'bbands'):
+            params['bbands'] = {
                 'period': indicator_params.get('period', 20),
-                'std_dev': indicator_params.get('std', 2)
+                'std': indicator_params.get('std', indicator_params.get('std_dev', 2))
+            }
+        elif name == 'macd':
+            params['macd'] = {
+                'fast_period': indicator_params.get('fast_period', indicator_params.get('fast', 12)),
+                'slow_period': indicator_params.get('slow_period', indicator_params.get('slow', 26)),
+                'signal_period': indicator_params.get('signal_period', indicator_params.get('signal', 9)),
             }
         elif name == 'atr':
             params['atr'] = indicator_params
@@ -72,9 +78,9 @@ def validate_indicator_params(indicator: Dict) -> bool:
             logger.warning(f"Invalid period for RSI: {period}")
             return False
     
-    elif name == 'bollinger_bands':
+    elif name in ('bollinger_bands', 'bbands'):
         period = params.get('period')
-        std_dev = params.get('std')
+        std_dev = params.get('std', params.get('std_dev'))
         if not period or not isinstance(period, (int, float)) or period <= 0:
             logger.warning(f"Invalid period for Bollinger Bands: {period}")
             return False
