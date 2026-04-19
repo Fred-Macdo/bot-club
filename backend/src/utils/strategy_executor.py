@@ -1,19 +1,16 @@
 import logging
 import polars as pl
-from datetime import datetime
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Dict, Any, List, Optional
 from decimal import Decimal
 from bson import ObjectId
 
 from ..services.data_retrieval.data_manager import DataManager
 
 from .indicator_factory import IndicatorFactory
-from ..models.portfolio_models import StrategyPortfolio, CompletedTrade, PositionLot
+from ..models.portfolio_models import StrategyPortfolio, PositionLot
 from .trade_logger import TradeLogger
 from .condition_checker import ConditionChecker
 from .indicator_converter import convert_indicators_to_params
-from .date_utils import DateUtils
-from .enums import TradingMode
 
 logger = logging.getLogger(__name__)
 

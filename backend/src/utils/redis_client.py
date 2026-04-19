@@ -1,8 +1,7 @@
 import os
 import json
-import asyncio
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 # Try to import redis, fall back to mock if not available
 try:

@@ -1,16 +1,14 @@
 import asyncio
 import logging
-from math import log
 from typing import Dict, Any, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import polars as pl
 from pymongo.database import Database
 
-from ..data_retrieval.data_manager import DataManager, TIMEFRAME_MAPPINGS
+from ..data_retrieval.data_manager import DataManager
 from ..indicators.indicator_factory import IndicatorFactory
-from ...models.portfolio_models import StrategyPortfolio
 from ..utils.condition_checker import ConditionChecker
 from ..utils.enums import TradingMode
 from ..utils.indicator_converter import IndicatorConverter

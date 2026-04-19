@@ -162,7 +162,7 @@ class IndicatorFactory:
         return plta.obv(
             pl.col("close"),
             pl.col("volume")
-        ).alias(f'obv')
+        ).alias('obv')
     
     def calculate_mfi(self, period):
         """
@@ -177,7 +177,7 @@ class IndicatorFactory:
             pl.col("close"),
             pl.col("volume"),
             timeperiod=period
-        ).alias(f'mfi')
+        ).alias('mfi')
     
     def calculate_cci(self, period):
         """
@@ -191,7 +191,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).alias(f'cci')
+        ).alias('cci')
     
     def calculate_vwap(self, period):
         """
@@ -206,7 +206,7 @@ class IndicatorFactory:
             (pl.col("close") * pl.col("volume"))
             .rolling_sum(window_size=period, min_periods=1) / 
             pl.col("volume").rolling_sum(window_size=period, min_periods=1)
-        ).alias(f'vwap_calc')
+        ).alias('vwap_calc')
 
     def calculate_indicators(self):
         """

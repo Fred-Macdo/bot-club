@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from typing import Optional
-from fastapi import WebSocket, WebSocketDisconnect, Query
+from fastapi import WebSocket, WebSocketDisconnect
 from jose import JWTError, jwt
 from redis.asyncio import Redis
 from ..config import REDIS_URL
@@ -105,7 +105,7 @@ class WebSocketManager:
             logger.error(f"WebSocket error for task {task_id}: {e}", exc_info=True)
             try:
                 await websocket.close(code=1011, reason=str(e))
-            except:
+            except Exception:
                 pass
         finally:
             await redis.close()

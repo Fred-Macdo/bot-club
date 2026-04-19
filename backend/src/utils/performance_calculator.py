@@ -1,9 +1,8 @@
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
-from bson import ObjectId
 
 from ..models.backtest import BacktestDetailedSummary
 
