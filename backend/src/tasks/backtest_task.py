@@ -18,11 +18,9 @@ from src.celery_app import celery_app  # noqa: E402
 
 # ==================== ASYNC HELPERS ====================
 
+
 async def _save_backtest_results(
-    backtest_id: str,
-    user_id: str,
-    payload: Dict[str, Any],
-    portfolio
+    backtest_id: str, user_id: str, payload: Dict[str, Any], portfolio
 ) -> None:
     """
     Save backtest results to MongoDB asynchronously.
@@ -34,29 +32,35 @@ async def _save_backtest_results(
     # --- Map completed trades to TradeDetail format ---
     trades = []
     for i, trade in enumerate(portfolio.completed_trades):
-        trades.append({
-            "id": i + 1,
-            "position_id": trade.lot_id,
-            "symbol": trade.symbol,
-            "side": trade.trade_type.value if hasattr(trade.trade_type, 'value') else str(trade.trade_type),
-            "entry_date": trade.entry_time.isoformat(),
-            "entry_price": float(trade.entry_price),
-            "exit_date": trade.exit_time.isoformat() if trade.exit_time else None,
-            "exit_price": float(trade.exit_price) if trade.exit_price else None,
-            "quantity": float(trade.quantity),
-            "pnl": float(trade.realized_pnl),
-            "return_pct": trade.realized_pnl_pct or 0.0,
-        })
+        trades.append(
+            {
+                "id": i + 1,
+                "position_id": trade.lot_id,
+                "symbol": trade.symbol,
+                "side": trade.trade_type.value
+                if hasattr(trade.trade_type, "value")
+                else str(trade.trade_type),
+                "entry_date": trade.entry_time.isoformat(),
+                "entry_price": float(trade.entry_price),
+                "exit_date": trade.exit_time.isoformat() if trade.exit_time else None,
+                "exit_price": float(trade.exit_price) if trade.exit_price else None,
+                "quantity": float(trade.quantity),
+                "pnl": float(trade.realized_pnl),
+                "return_pct": trade.realized_pnl_pct or 0.0,
+            }
+        )
 
     # --- Map equity curve to EquityPoint format ---
     equity_curve = []
     for snapshot in portfolio.equity_curve:
-        equity_curve.append({
-            "timestamp": snapshot.timestamp.isoformat(),
-            "value": float(snapshot.total_value),
-            "cash": float(snapshot.cash),
-            "positions_value": float(snapshot.positions_value),
-        })
+        equity_curve.append(
+            {
+                "timestamp": snapshot.timestamp.isoformat(),
+                "value": float(snapshot.total_value),
+                "cash": float(snapshot.cash),
+                "positions_value": float(snapshot.positions_value),
+            }
+        )
 
     # --- Calculate derived metrics ---
     final_equity = (
@@ -65,8 +69,16 @@ async def _save_backtest_results(
         else float(portfolio.current_cash)
     )
 
-    winning_pnl = sum(float(t.realized_pnl) for t in portfolio.completed_trades if t.realized_pnl > 0)
-    losing_pnl = abs(sum(float(t.realized_pnl) for t in portfolio.completed_trades if t.realized_pnl < 0))
+    winning_pnl = sum(
+        float(t.realized_pnl) for t in portfolio.completed_trades if t.realized_pnl > 0
+    )
+    losing_pnl = abs(
+        sum(
+            float(t.realized_pnl)
+            for t in portfolio.completed_trades
+            if t.realized_pnl < 0
+        )
+    )
     profit_factor = round(winning_pnl / losing_pnl, 4) if losing_pnl > 0 else 0.0
 
     perf = portfolio.performance
@@ -89,9 +101,9 @@ async def _save_backtest_results(
     # Convert date/datetime objects to ISO strings for MongoDB compatibility
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
-    if hasattr(start_date, 'isoformat'):
+    if hasattr(start_date, "isoformat"):
         start_date = start_date.isoformat()
-    if hasattr(end_date, 'isoformat'):
+    if hasattr(end_date, "isoformat"):
         end_date = end_date.isoformat()
 
     backtest_doc = {
@@ -115,7 +127,10 @@ async def _save_backtest_results(
         {"backtest_id": backtest_id},
         {
             "$set": backtest_doc,
-            "$setOnInsert": {"backtest_id": backtest_id, "created_at": datetime.now(tz=timezone.utc)},
+            "$setOnInsert": {
+                "backtest_id": backtest_id,
+                "created_at": datetime.now(tz=timezone.utc),
+            },
         },
         upsert=True,
     )
@@ -137,7 +152,10 @@ async def _save_backtest_error(backtest_id: str, user_id: str, error: str) -> No
                 "error": error,
                 "updated_at": datetime.now(tz=timezone.utc),
             },
-            "$setOnInsert": {"backtest_id": backtest_id, "created_at": datetime.now(tz=timezone.utc)},
+            "$setOnInsert": {
+                "backtest_id": backtest_id,
+                "created_at": datetime.now(tz=timezone.utc),
+            },
         },
         upsert=True,
     )
@@ -162,9 +180,9 @@ async def _run_backtest_pipeline(payload: Dict[str, Any]):
     # Use dates from the payload (set at backtest runtime), NOT from strategy config
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
-    if hasattr(start_date, 'isoformat'):
+    if hasattr(start_date, "isoformat"):
         start_date = start_date.isoformat()
-    if hasattr(end_date, 'isoformat'):
+    if hasattr(end_date, "isoformat"):
         end_date = end_date.isoformat()
 
     data = await data_manager.fetch_historical_data(
@@ -193,6 +211,7 @@ async def _run_backtest_pipeline(payload: Dict[str, Any]):
 
 # ==================== CELERY TASK ====================
 
+
 @celery_app.task(
     bind=True,
     name="src.tasks.backtest_task.run_backtest_task",
@@ -204,7 +223,7 @@ async def _run_backtest_pipeline(payload: Dict[str, Any]):
 def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Celery task to execute a backtest.
-    
+
     Args:
         payload: Dict containing:
             - backtest_id: str
@@ -217,7 +236,7 @@ def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             - data_provider: str
             - timeframe: str
             - encrypted_keys: dict
-    
+
     Returns:
         Dict with backtest results or error
     """
@@ -242,9 +261,9 @@ def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # Persist error status so the UI can show the failure
         try:
-            asyncio.run(_save_backtest_error(
-                backtest_id, payload.get("user_id", ""), str(e)
-            ))
+            asyncio.run(
+                _save_backtest_error(backtest_id, payload.get("user_id", ""), str(e))
+            )
         except Exception as save_err:
             logger.error(f"Failed to save error status: {save_err}")
 

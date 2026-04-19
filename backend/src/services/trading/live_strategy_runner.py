@@ -24,7 +24,10 @@ import polars as pl
 from pymongo.database import Database
 
 from .alpaca_client import AlpacaTradingClient
-from ...services.data_retrieval.data_providers import AlpacaProvider, AVAILABLE_CRYPTO_ASSETS
+from ...services.data_retrieval.data_providers import (
+    AlpacaProvider,
+    AVAILABLE_CRYPTO_ASSETS,
+)
 from ...utils.asset_classifier import is_within_market_hours
 from ...utils.indicator_factory import IndicatorFactory
 from ...utils.condition_checker import ConditionChecker
@@ -64,7 +67,7 @@ class LiveStrategyRunner:
         session_id: Optional[str] = None,
         is_crypto: bool = False,
         extended_hours: bool = False,
-        mode: str = 'paper',
+        mode: str = "paper",
     ):
         self.alpaca = alpaca_client
         self.data_provider = data_provider
@@ -87,13 +90,21 @@ class LiveStrategyRunner:
         self.entry_conditions = config.get("entry_conditions", [])
         self.exit_conditions = config.get("exit_conditions", [])
         self.risk_management = config.get("risk_management", {})
-        self.indicator_params = convert_indicators_to_params(config.get("indicators", []))
+        self.indicator_params = convert_indicators_to_params(
+            config.get("indicators", [])
+        )
 
         # DCA settings
-        dca_config = config.get("dollar_cost_averaging", config.get("dollar_cost_average", {}))
+        dca_config = config.get(
+            "dollar_cost_averaging", config.get("dollar_cost_average", {})
+        )
         self.dca_enabled = dca_config.get("enabled", False)
-        self.max_dca_positions = dca_config.get("max_positions", dca_config.get("max_attempts", 1))
-        self.dca_interval_seconds = self._parse_interval(dca_config.get("interval", "0"))
+        self.max_dca_positions = dca_config.get(
+            "max_positions", dca_config.get("max_attempts", 1)
+        )
+        self.dca_interval_seconds = self._parse_interval(
+            dca_config.get("interval", "0")
+        )
         self.dca_amount_per_attempt = float(dca_config.get("amount_per_attempt", 0))
 
         # Helpers
@@ -127,13 +138,17 @@ class LiveStrategyRunner:
         strategy+user, otherwise create a new one.  This is the key to resumption.
         """
         try:
-            doc = self.db.strategy_portfolios.find_one({
-                "strategy_id": self.strategy_id,
-                "user_id": self.user_id,
-                "mode": self.mode,
-            })
+            doc = self.db.strategy_portfolios.find_one(
+                {
+                    "strategy_id": self.strategy_id,
+                    "user_id": self.user_id,
+                    "mode": self.mode,
+                }
+            )
             if doc:
-                logger.info(f"Resuming portfolio from DB for strategy {self.strategy_id}")
+                logger.info(
+                    f"Resuming portfolio from DB for strategy {self.strategy_id}"
+                )
                 portfolio = self._deserialize_portfolio(doc, initial_capital)
                 # Assign early so _reconcile_positions can call _reconcile_phantom_position
                 self.portfolio = portfolio
@@ -166,6 +181,7 @@ class LiveStrategyRunner:
         """
         try:
             alpaca_positions = self.alpaca.get_positions()
+
             # Normalize Alpaca symbols: crypto comes back as DOGEUSD, strip /USD or USD suffix
             def normalize_sym(s):
                 if s and s.endswith("USD") and "/" not in s and len(s) > 3:
@@ -178,7 +194,10 @@ class LiveStrategyRunner:
             portfolio_lot_count = sum(len(lots) for lots in portfolio.lots.values())
             alpaca_position_count = len(alpaca_positions)
 
-            if portfolio_symbols != alpaca_symbols or portfolio_lot_count != alpaca_position_count:
+            if (
+                portfolio_symbols != alpaca_symbols
+                or portfolio_lot_count != alpaca_position_count
+            ):
                 logger.warning(
                     f"POSITION MISMATCH on resume — "
                     f"MongoDB lots: {portfolio_lot_count} across {sorted(portfolio_symbols)}, "
@@ -188,16 +207,24 @@ class LiveStrategyRunner:
                 phantom_symbols = portfolio_symbols - alpaca_symbols
                 for sym in phantom_symbols:
                     lots = portfolio.lots.get(sym, [])
-                    avg_entry = float(sum(lot.entry_price for lot in lots) / len(lots)) if lots else 0.0
+                    avg_entry = (
+                        float(sum(lot.entry_price for lot in lots) / len(lots))
+                        if lots
+                        else 0.0
+                    )
                     try:
                         quote = self.alpaca.get_latest_quote(
                             sym,
-                            asset_type="crypto" if sym in AVAILABLE_CRYPTO_ASSETS else "stock",
+                            asset_type="crypto"
+                            if sym in AVAILABLE_CRYPTO_ASSETS
+                            else "stock",
                         )
                         exit_price = quote.get("price", avg_entry) or avg_entry
                     except Exception:
                         exit_price = avg_entry
-                    self._reconcile_phantom_position(sym, exit_price, "Phantom position reconciled on startup")
+                    self._reconcile_phantom_position(
+                        sym, exit_price, "Phantom position reconciled on startup"
+                    )
             else:
                 logger.info(
                     f"Position reconciliation OK: {portfolio_lot_count} lots, "
@@ -206,7 +233,9 @@ class LiveStrategyRunner:
         except Exception as e:
             logger.error(f"Position reconciliation failed (non-fatal): {e}")
 
-    def _deserialize_portfolio(self, doc: Dict[str, Any], initial_capital: float) -> StrategyPortfolio:
+    def _deserialize_portfolio(
+        self, doc: Dict[str, Any], initial_capital: float
+    ) -> StrategyPortfolio:
         """
         Reconstruct a StrategyPortfolio from a MongoDB document.
         Handles type coercion for Decimal, datetime, etc.
@@ -231,7 +260,9 @@ class LiveStrategyRunner:
 
         # Reconstruct performance
         perf_data = doc.get("performance", {})
-        performance = PerformanceMetrics(**perf_data) if perf_data else PerformanceMetrics()
+        performance = (
+            PerformanceMetrics(**perf_data) if perf_data else PerformanceMetrics()
+        )
 
         stored_capital = float(doc.get("initial_capital", initial_capital))
         effective_capital = max(stored_capital, initial_capital)
@@ -353,7 +384,9 @@ class LiveStrategyRunner:
 
     # ==================== SYMBOL PROCESSING ====================
 
-    def _process_symbol(self, symbol: str, asset_type: str, latest_prices: Dict[str, float]):
+    def _process_symbol(
+        self, symbol: str, asset_type: str, latest_prices: Dict[str, float]
+    ):
         """Fetch data, compute indicators, check conditions, execute trades for one symbol."""
 
         # 1. Fetch historical data
@@ -370,10 +403,22 @@ class LiveStrategyRunner:
             return
 
         # Debug: log computed indicator columns
-        _base = {"open", "high", "low", "close", "volume", "symbol",
-                 "datetime", "trade_count", "vwap"}
-        _computed = [c for c in df_with_indicators.columns
-                     if c.lower() not in _base and not c.endswith("_prev")]
+        _base = {
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "symbol",
+            "datetime",
+            "trade_count",
+            "vwap",
+        }
+        _computed = [
+            c
+            for c in df_with_indicators.columns
+            if c.lower() not in _base and not c.endswith("_prev")
+        ]
         self._log(f"Indicator params: {self.indicator_params}")
         self._log(f"Indicator columns for {symbol}: {_computed}")
         self._log(f"All DataFrame columns: {df_with_indicators.columns}")
@@ -401,7 +446,9 @@ class LiveStrategyRunner:
                         f"price ${current_price:.4f} <= SL ${float(lot.stop_loss_price):.4f}",
                         "WARNING",
                     )
-                elif lot.take_profit_price and current_price >= float(lot.take_profit_price):
+                elif lot.take_profit_price and current_price >= float(
+                    lot.take_profit_price
+                ):
                     lots_to_exit.append((lot, "Take Profit"))
                     self._log(
                         f"🎯 TAKE PROFIT hit for {symbol} lot {lot.lot_id[:8]}: "
@@ -422,7 +469,10 @@ class LiveStrategyRunner:
             if should_exit:
                 exit_reason = self._build_exit_reason(exit_details)
                 self._log(f"🔴 EXIT signal for {symbol}: {exit_reason}", "WARNING")
-                self._publish_log(f"Exit conditions met for {symbol}: {exit_reason}", event_type=LogEventType.EXIT_CONDITIONS)
+                self._publish_log(
+                    f"Exit conditions met for {symbol}: {exit_reason}",
+                    event_type=LogEventType.EXIT_CONDITIONS,
+                )
                 self._execute_sell(symbol, current_price, exit_reason, asset_type)
 
         # Refresh lots after potential exit
@@ -432,14 +482,17 @@ class LiveStrategyRunner:
         # --- CHECK ENTRIES ---
         is_dca_entry = self.dca_enabled and current_lot_count > 0
         can_enter = (
-            (self.dca_enabled and current_lot_count < self.max_dca_positions)
-            or (not self.dca_enabled and current_lot_count == 0)
-        )
+            self.dca_enabled and current_lot_count < self.max_dca_positions
+        ) or (not self.dca_enabled and current_lot_count == 0)
 
         # Enforce DCA interval
         if can_enter and is_dca_entry and self.dca_interval_seconds > 0:
             latest_lot = max(current_lots, key=lambda lot: lot.entry_time)
-            lot_entry = latest_lot.entry_time if latest_lot.entry_time.tzinfo else latest_lot.entry_time.replace(tzinfo=timezone.utc)
+            lot_entry = (
+                latest_lot.entry_time
+                if latest_lot.entry_time.tzinfo
+                else latest_lot.entry_time.replace(tzinfo=timezone.utc)
+            )
             elapsed = (datetime.now(tz=timezone.utc) - lot_entry).total_seconds()
             if elapsed < self.dca_interval_seconds:
                 can_enter = False
@@ -453,12 +506,23 @@ class LiveStrategyRunner:
                 conditions=self.entry_conditions, row=latest_data
             )
             if should_enter:
-                self._log(f"🟢 ENTRY signal for {symbol}" + (" (DCA)" if is_dca_entry else ""))
-                self._execute_buy(symbol, current_price, latest_data, asset_type, is_dca=is_dca_entry)
+                self._log(
+                    f"🟢 ENTRY signal for {symbol}" + (" (DCA)" if is_dca_entry else "")
+                )
+                self._execute_buy(
+                    symbol, current_price, latest_data, asset_type, is_dca=is_dca_entry
+                )
 
     # ==================== ORDER EXECUTION ====================
 
-    def _execute_buy(self, symbol: str, price: float, latest_data: Dict, asset_type: str, is_dca: bool = False):
+    def _execute_buy(
+        self,
+        symbol: str,
+        price: float,
+        latest_data: Dict,
+        asset_type: str,
+        is_dca: bool = False,
+    ):
         """Calculate size, submit buy order, record lot with SL/TP prices."""
         qty = self._calculate_position_size(price, latest_data, is_dca=is_dca)
         if qty <= 0:
@@ -468,7 +532,10 @@ class LiveStrategyRunner:
         # Alpaca requires minimum order cost basis of $1
         cost_basis = qty * price
         if cost_basis < 1.0:
-            self._log(f"Order cost basis ${cost_basis:.2f} is below Alpaca's $1 minimum for {symbol}, skipping buy", "WARNING")
+            self._log(
+                f"Order cost basis ${cost_basis:.2f} is below Alpaca's $1 minimum for {symbol}, skipping buy",
+                "WARNING",
+            )
             return
 
         # Normalize symbol for Alpaca API
@@ -489,7 +556,10 @@ class LiveStrategyRunner:
             fill_qty = float(filled_order.get("filled_qty", qty))
 
             if filled_order.get("status") not in ("filled", "partially_filled"):
-                self._log(f"Buy order for {symbol} not filled: {filled_order.get('status')}", "WARNING")
+                self._log(
+                    f"Buy order for {symbol} not filled: {filled_order.get('status')}",
+                    "WARNING",
+                )
                 return
 
             # Calculate SL/TP prices for this lot
@@ -517,7 +587,9 @@ class LiveStrategyRunner:
 
             sl_str = f" SL=${sl_price:.4f}" if sl_price else ""
             tp_str = f" TP=${tp_price:.4f}" if tp_price else ""
-            self._log(f"✅ BUY: {fill_qty} {symbol} @ ${fill_price:.4f}{sl_str}{tp_str} (order {order['id']})")
+            self._log(
+                f"✅ BUY: {fill_qty} {symbol} @ ${fill_price:.4f}{sl_str}{tp_str} (order {order['id']})"
+            )
 
         except Exception as e:
             logger.error(f"Buy order failed for {symbol}: {e}", exc_info=True)
@@ -578,7 +650,9 @@ class LiveStrategyRunner:
             # trying to short the asset (which causes 403 for crypto).
             try:
                 order = self.alpaca.close_position(order_symbol)
-                self._log(f"Close-position order submitted for {symbol} (order {order.get('id')})")
+                self._log(
+                    f"Close-position order submitted for {symbol} (order {order.get('id')})"
+                )
             except Exception as cp_err:
                 logger.warning(f"close_position failed for {order_symbol}: {cp_err}")
                 # Check whether the broker actually holds this position
@@ -590,7 +664,9 @@ class LiveStrategyRunner:
                 # Broker does have a position — fall back to market sell
                 order = self.alpaca.submit_order(
                     symbol=order_symbol,
-                    qty=round(total_qty, 6) if asset_type == "crypto" else round(total_qty, 2),
+                    qty=round(total_qty, 6)
+                    if asset_type == "crypto"
+                    else round(total_qty, 2),
                     side="sell",
                     order_type="market",
                     time_in_force="gtc",
@@ -600,7 +676,10 @@ class LiveStrategyRunner:
             fill_price = float(filled_order.get("filled_avg_price", price))
 
             if filled_order.get("status") not in ("filled", "partially_filled"):
-                self._log(f"Sell order for {symbol} not filled: {filled_order.get('status')}", "WARNING")
+                self._log(
+                    f"Sell order for {symbol} not filled: {filled_order.get('status')}",
+                    "WARNING",
+                )
                 return
 
             # Process in portfolio
@@ -625,7 +704,9 @@ class LiveStrategyRunner:
             logger.error(f"Sell order failed for {symbol}: {e}", exc_info=True)
             self._log(f"Sell order failed for {symbol}: {e}", "ERROR")
 
-    def _execute_sell_lot(self, symbol: str, lot: PositionLot, price: float, reason: str, asset_type: str):
+    def _execute_sell_lot(
+        self, symbol: str, lot: PositionLot, price: float, reason: str, asset_type: str
+    ):
         """Sell a single lot (used for per-lot SL/TP exits)."""
         lot_qty = float(lot.quantity)
         if lot_qty <= 0:
@@ -646,7 +727,10 @@ class LiveStrategyRunner:
             fill_price = float(filled_order.get("filled_avg_price", price))
 
             if filled_order.get("status") not in ("filled", "partially_filled"):
-                self._log(f"Sell lot order for {symbol} not filled: {filled_order.get('status')}", "WARNING")
+                self._log(
+                    f"Sell lot order for {symbol} not filled: {filled_order.get('status')}",
+                    "WARNING",
+                )
                 return
 
             # Process in portfolio (sell exactly this lot's quantity)
@@ -677,8 +761,12 @@ class LiveStrategyRunner:
             if broker_pos is None:
                 self._reconcile_phantom_position(symbol, price, reason)
             else:
-                logger.error(f"Sell lot order failed for {symbol} ({reason}): {e}", exc_info=True)
-                self._log(f"Sell lot order failed for {symbol} ({reason}): {e}", "ERROR")
+                logger.error(
+                    f"Sell lot order failed for {symbol} ({reason}): {e}", exc_info=True
+                )
+                self._log(
+                    f"Sell lot order failed for {symbol} ({reason}): {e}", "ERROR"
+                )
 
     def _reconcile_phantom_position(self, symbol: str, price: float, reason: str):
         """Clear a phantom position from the internal portfolio.
@@ -725,14 +813,21 @@ class LiveStrategyRunner:
             self.persistence.sync_portfolio_to_db(self.portfolio)
         except Exception as e:
             # Last resort: force-clear the lots so we don't loop forever
-            logger.error(f"Reconciliation process_sell failed for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Reconciliation process_sell failed for {symbol}: {e}", exc_info=True
+            )
             self.portfolio.lots.pop(symbol, None)
             self.persistence.sync_portfolio_to_db(self.portfolio)
-            self._log(f"Force-cleared phantom lots for {symbol} after reconciliation error", "ERROR")
+            self._log(
+                f"Force-cleared phantom lots for {symbol} after reconciliation error",
+                "ERROR",
+            )
 
     # ==================== DATA FETCHING ====================
 
-    def _fetch_indicator_data(self, symbol: str, asset_type: str) -> Optional[pl.DataFrame]:
+    def _fetch_indicator_data(
+        self, symbol: str, asset_type: str
+    ) -> Optional[pl.DataFrame]:
         """
         Fetch recent historical bars for indicator calculation.
         Uses the same AlpacaProvider that backtests use, called synchronously.
@@ -790,7 +885,7 @@ class LiveStrategyRunner:
             # Filter to just this symbol
             if "symbol" in df.columns:
                 df = df.filter(pl.col("symbol") == symbol)
-                #self._log(f"Filtered DataFrame for {symbol}: {df}")
+                # self._log(f"Filtered DataFrame for {symbol}: {df}")
             return df.sort("datetime") if "datetime" in df.columns else df
 
         except Exception as e:
@@ -799,7 +894,9 @@ class LiveStrategyRunner:
 
     # ==================== POSITION SIZING ====================
 
-    def _calculate_position_size(self, price: float, latest_data: Dict, is_dca: bool = False) -> float:
+    def _calculate_position_size(
+        self, price: float, latest_data: Dict, is_dca: bool = False
+    ) -> float:
         """Calculate position size based on risk management config.
 
         Supported ``position_sizing_method`` values:
@@ -838,11 +935,15 @@ class LiveStrategyRunner:
                 qty = amount_to_risk / stop_dist
                 return self._clamp_to_max_position(qty, price)
             # Fallback to risk_based when ATR unavailable
-            self._log("ATR data unavailable, falling back to risk_based sizing", "WARNING")
+            self._log(
+                "ATR data unavailable, falling back to risk_based sizing", "WARNING"
+            )
 
         if method == "risk_based" or method == "atr_based":
             # risk_amount / (price × stop_loss_pct)
-            dollar_risk_per_share = price * stop_loss_pct if stop_loss_pct > 0 else price
+            dollar_risk_per_share = (
+                price * stop_loss_pct if stop_loss_pct > 0 else price
+            )
             qty = amount_to_risk / dollar_risk_per_share
             return self._clamp_to_max_position(qty, price)
 
@@ -866,7 +967,9 @@ class LiveStrategyRunner:
         if max_pos and max_pos > 0:
             max_qty = max_pos / price
             if qty > max_qty:
-                self._log(f"Position clamped to max_position_size ${max_pos:.0f} ({max_qty:.4f} units)")
+                self._log(
+                    f"Position clamped to max_position_size ${max_pos:.0f} ({max_qty:.4f} units)"
+                )
                 return max_qty
         return qty
 
@@ -908,14 +1011,19 @@ class LiveStrategyRunner:
             logger.info(message)
 
         if self.stream_publisher:
-            self.stream_publisher("log", {
-                "event_type": LogEventType.LOG,
-                "timestamp": datetime.now(tz=timezone.utc).timestamp() * 1000,
-                "level": level,
-                "message": str(message),
-            })
+            self.stream_publisher(
+                "log",
+                {
+                    "event_type": LogEventType.LOG,
+                    "timestamp": datetime.now(tz=timezone.utc).timestamp() * 1000,
+                    "level": level,
+                    "message": str(message),
+                },
+            )
 
-    def _publish_log(self, message: str, level: str = "INFO", event_type=LogEventType.LOG):
+    def _publish_log(
+        self, message: str, level: str = "INFO", event_type=LogEventType.LOG
+    ):
         """Publish a log with a specific event_type for frontend rendering."""
         if self.stream_publisher:
             payload = {
@@ -937,26 +1045,32 @@ class LiveStrategyRunner:
         positions_data = []
         for symbol, lots in self.portfolio.lots.items():
             for lot in lots:
-                positions_data.append({
-                    "symbol": symbol,
-                    "quantity": float(lot.quantity),
-                    "entry_price": float(lot.entry_price),
-                    "lot_id": lot.lot_id,
-                })
+                positions_data.append(
+                    {
+                        "symbol": symbol,
+                        "quantity": float(lot.quantity),
+                        "entry_price": float(lot.entry_price),
+                        "lot_id": lot.lot_id,
+                    }
+                )
 
-        payload = json.dumps({
-            "title": f"Current Positions ({len(positions_data)} open)",
-            "positions": positions_data,
-        })
+        payload = json.dumps(
+            {
+                "title": f"Current Positions ({len(positions_data)} open)",
+                "positions": positions_data,
+            }
+        )
         self._publish_log(payload, event_type=LogEventType.POSITIONS)
 
     def _publish_account_value(self, total_value: float, cash: float):
         """Publish account value for frontend equity chart + metrics."""
-        payload = json.dumps({
-            "title": f"Account Value: ${total_value:,.2f}",
-            "account_value": total_value,
-            "cash": cash,
-        })
+        payload = json.dumps(
+            {
+                "title": f"Account Value: ${total_value:,.2f}",
+                "account_value": total_value,
+                "cash": cash,
+            }
+        )
         self._publish_log(payload, event_type=LogEventType.ACCOUNT_VALUE)
 
     def _publish_indicator_data(self, symbol: str, df: pl.DataFrame):
@@ -969,7 +1083,10 @@ class LiveStrategyRunner:
                 "title": f"Technical Indicators for {symbol}",
                 "data": json.loads(df_json),
             }
-            self._publish_log(json.dumps(log_payload, indent=4), event_type=LogEventType.PRICE_DATAFRAME)
+            self._publish_log(
+                json.dumps(log_payload, indent=4),
+                event_type=LogEventType.PRICE_DATAFRAME,
+            )
         except Exception as e:
             logger.error(f"Error publishing indicator data: {e}")
 
@@ -982,11 +1099,22 @@ class LiveStrategyRunner:
         """
         try:
             # OHLCV + internal columns to exclude — keep only indicator columns
-            base_cols = {"open", "high", "low", "close", "volume", "symbol",
-                         "datetime", "trade_count", "vwap"}
-            indicator_cols = [c for c in df.columns
-                             if c.lower() not in base_cols
-                             and not c.endswith("_prev")]  # skip _prev helper cols
+            base_cols = {
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "symbol",
+                "datetime",
+                "trade_count",
+                "vwap",
+            }
+            indicator_cols = [
+                c
+                for c in df.columns
+                if c.lower() not in base_cols and not c.endswith("_prev")
+            ]  # skip _prev helper cols
 
             if not indicator_cols:
                 return
@@ -1000,20 +1128,25 @@ class LiveStrategyRunner:
             rows = json.loads(subset.write_json())
 
             if self.stream_publisher:
-                self.stream_publisher("indicator_values", {
-                    "event_type": LogEventType.INDICATOR_VALUES,
-                    "timestamp": datetime.now(tz=timezone.utc).timestamp() * 1000,
-                    "symbol": symbol,
-                    "columns": indicator_cols,
-                    "rows": rows,
-                })
+                self.stream_publisher(
+                    "indicator_values",
+                    {
+                        "event_type": LogEventType.INDICATOR_VALUES,
+                        "timestamp": datetime.now(tz=timezone.utc).timestamp() * 1000,
+                        "symbol": symbol,
+                        "columns": indicator_cols,
+                        "rows": rows,
+                    },
+                )
         except Exception as e:
             logger.error(f"Error publishing indicator values: {e}", exc_info=True)
 
     def _publish_portfolio_snapshot(self):
         """Publish full portfolio snapshot for frontend."""
         self._publish_log(
-            self.portfolio.model_dump_json(indent=4, exclude={"user_id", "strategy_id"}),
+            self.portfolio.model_dump_json(
+                indent=4, exclude={"user_id", "strategy_id"}
+            ),
             event_type=LogEventType.PORTFOLIO_SNAPSHOT,
         )
 
@@ -1046,7 +1179,7 @@ class LiveStrategyRunner:
             return self.alpaca.get_cash()
         except Exception as e:
             logger.error(f"Error getting cash from Alpaca: {e}")
-            if hasattr(self, 'portfolio') and self.portfolio:
+            if hasattr(self, "portfolio") and self.portfolio:
                 return float(self.portfolio.current_cash)
             return 0.0
 

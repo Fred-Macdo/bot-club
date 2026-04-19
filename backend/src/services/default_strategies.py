@@ -1,4 +1,4 @@
-    # backend/services/default_strategies.py
+# backend/services/default_strategies.py
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -20,18 +20,10 @@ DEFAULT_STRATEGIES = [
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "entry_conditions": [
-                {
-                    "indicator": "ema_5",
-                    "comparison": "crosses_above",
-                    "value": "ema_20"
-                }
+                {"indicator": "ema_5", "comparison": "crosses_above", "value": "ema_20"}
             ],
             "exit_conditions": [
-                {
-                    "indicator": "ema_5",
-                    "comparison": "crosses_below",
-                    "value": "ema_20"
-                }
+                {"indicator": "ema_5", "comparison": "crosses_below", "value": "ema_20"}
             ],
             "risk_management": {
                 "position_sizing_method": "risk_based",
@@ -39,14 +31,14 @@ DEFAULT_STRATEGIES = [
                 "stop_loss": 0.05,
                 "take_profit": 0.15,
                 "max_position_size": 10000,
-                "atr_multiplier": 2
+                "atr_multiplier": 2,
             },
             "indicators": [
                 {"name": "EMA", "params": {"period": 5}},
                 {"name": "EMA", "params": {"period": 20}},
-                {"name": "RSI", "params": {"period": 14}}
-            ]
-        }
+                {"name": "RSI", "params": {"period": 14}},
+            ],
+        },
     },
     {
         "key": "bollinger_bands_v1",
@@ -58,18 +50,10 @@ DEFAULT_STRATEGIES = [
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "entry_conditions": [
-                {
-                    "indicator": "close",
-                    "comparison": "below",
-                    "value": "lowerband"
-                }
+                {"indicator": "close", "comparison": "below", "value": "lowerband"}
             ],
             "exit_conditions": [
-                {
-                    "indicator": "close",
-                    "comparison": "above",
-                    "value": "middleband"
-                }
+                {"indicator": "close", "comparison": "above", "value": "middleband"}
             ],
             "risk_management": {
                 "position_sizing_method": "risk_based",
@@ -77,13 +61,13 @@ DEFAULT_STRATEGIES = [
                 "stop_loss": 0.03,
                 "take_profit": 0.06,
                 "max_position_size": 15000,
-                "atr_multiplier": 1.5
+                "atr_multiplier": 1.5,
             },
             "indicators": [
                 {"name": "BBANDS", "params": {"period": 20, "std_dev": 2}},
-                {"name": "RSI", "params": {"period": 14}}
-            ]
-        }
+                {"name": "RSI", "params": {"period": 14}},
+            ],
+        },
     },
     {
         "key": "rsi_reversal_v1",
@@ -95,18 +79,10 @@ DEFAULT_STRATEGIES = [
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "entry_conditions": [
-                {
-                    "indicator": "rsi",
-                    "comparison": "below",
-                    "value": "30"
-                }
+                {"indicator": "rsi", "comparison": "below", "value": "30"}
             ],
             "exit_conditions": [
-                {
-                    "indicator": "rsi",
-                    "comparison": "above",
-                    "value": "70"
-                }
+                {"indicator": "rsi", "comparison": "above", "value": "70"}
             ],
             "risk_management": {
                 "position_sizing_method": "risk_based",
@@ -114,15 +90,16 @@ DEFAULT_STRATEGIES = [
                 "stop_loss": 0.04,
                 "take_profit": 0.12,
                 "max_position_size": 20000,
-                "atr_multiplier": 2.5
+                "atr_multiplier": 2.5,
             },
             "indicators": [
                 {"name": "RSI", "params": {"period": 14}},
-                {"name": "SMA", "params": {"period": 50}}
-            ]
-        }
-    }
+                {"name": "SMA", "params": {"period": 50}},
+            ],
+        },
+    },
 ]
+
 
 async def initialize_default_strategies(db: Database) -> None:
     """
@@ -130,24 +107,30 @@ async def initialize_default_strategies(db: Database) -> None:
     This function ensures that default strategies are created only once.
     """
     default_strategies_collection = db["default_strategies"]
-    
+
     for strategy in DEFAULT_STRATEGIES:
         # Check if this default strategy already exists using its unique key
-        existing = await run_db_operation(default_strategies_collection.find_one, {"key": strategy["key"]})
-        
+        existing = await run_db_operation(
+            default_strategies_collection.find_one, {"key": strategy["key"]}
+        )
+
         if not existing:
             # Strategy doesn't exist, so create it
-            await run_db_operation(default_strategies_collection.insert_one, {
-                **strategy,
-                "created_at": datetime.now(tz=timezone.utc),
-                "updated_at": datetime.now(tz=timezone.utc),
-                "version": "1.0"  # Version tracking for future updates
-            })
+            await run_db_operation(
+                default_strategies_collection.insert_one,
+                {
+                    **strategy,
+                    "created_at": datetime.now(tz=timezone.utc),
+                    "updated_at": datetime.now(tz=timezone.utc),
+                    "version": "1.0",  # Version tracking for future updates
+                },
+            )
             print(f"Created default strategy: {strategy['name']}")
         else:
             # Strategy exists, check if it needs updating (optional)
             # You could implement version checking here if needed
             print(f"Default strategy already exists: {strategy['name']}")
+
 
 async def get_default_strategies_from_db(db: Database) -> List[Dict[str, Any]]:
     """
@@ -156,17 +139,18 @@ async def get_default_strategies_from_db(db: Database) -> List[Dict[str, Any]]:
     """
     default_strategies_collection = db["default_strategies"]
     strategies = []
-    
+
     cursor = default_strategies_collection.find({})
     raw_strategies = await run_db_operation(list, cursor)
-    
+
     for strategy in raw_strategies:
         # Remove MongoDB-specific fields that shouldn't be exposed
-        #strategy.pop("_id", None)
+        # strategy.pop("_id", None)
         strategy.pop("key", None)  # Hide internal key from frontend
         strategies.append(strategy)
-    
+
     return strategies
+
 
 async def create_checksum_for_strategy(strategy_config: Dict[str, Any]) -> str:
     """
@@ -177,21 +161,26 @@ async def create_checksum_for_strategy(strategy_config: Dict[str, Any]) -> str:
     config_string = json.dumps(strategy_config, sort_keys=True)
     return hashlib.sha256(config_string.encode()).hexdigest()
 
+
 async def update_default_strategies_if_needed(db: Database) -> None:
     """
     Check if any default strategies need updating based on version or checksum.
     This is useful when you update your default strategies in code.
     """
     default_strategies_collection = db["default_strategies"]
-    
+
     for strategy in DEFAULT_STRATEGIES:
-        existing = await run_db_operation(default_strategies_collection.find_one, {"key": strategy["key"]})
-        
+        existing = await run_db_operation(
+            default_strategies_collection.find_one, {"key": strategy["key"]}
+        )
+
         if existing:
             # Create checksums to compare
-            existing_checksum = await create_checksum_for_strategy(existing.get("config", {}))
+            existing_checksum = await create_checksum_for_strategy(
+                existing.get("config", {})
+            )
             new_checksum = await create_checksum_for_strategy(strategy["config"])
-            
+
             if existing_checksum != new_checksum:
                 # Strategy has changed, update it
                 await run_db_operation(
@@ -202,11 +191,12 @@ async def update_default_strategies_if_needed(db: Database) -> None:
                             **strategy,
                             "updated_at": datetime.now(tz=timezone.utc),
                             "previous_version": existing.get("version", "1.0"),
-                            "version": "1.1"  # Increment version
+                            "version": "1.1",  # Increment version
                         }
-                    }
+                    },
                 )
                 print(f"Updated default strategy: {strategy['name']}")
+
 
 async def get_default_strategies(db: Database) -> List[Dict[str, Any]]:
     """Fetches default strategies from the database."""
@@ -214,10 +204,11 @@ async def get_default_strategies(db: Database) -> List[Dict[str, Any]]:
     strategies = await run_db_operation(list, cursor)
     return strategies
 
+
 async def insert_default_strategies(db: Database, strategies: List[Dict[str, Any]]):
     """Inserts default strategies if they don't already exist."""
     await run_db_operation(
         db.strategy.insert_many,
         strategies,
-        ordered=False  # Continue on duplicate key errors
+        ordered=False,  # Continue on duplicate key errors
     )

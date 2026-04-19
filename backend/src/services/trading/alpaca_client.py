@@ -99,7 +99,9 @@ class AlpacaTradingClient:
             headers=self.headers,
         )
         if not resp.ok:
-            logger.error(f"close_position {symbol} failed: {resp.status_code} {resp.text}")
+            logger.error(
+                f"close_position {symbol} failed: {resp.status_code} {resp.text}"
+            )
         resp.raise_for_status()
         return resp.json()
 
@@ -163,7 +165,9 @@ class AlpacaTradingClient:
             logger.error(f"Order rejected: {resp.status_code} {resp.text}")
         resp.raise_for_status()
         result = resp.json()
-        logger.info(f"Order submitted: {result.get('id')} status={result.get('status')}")
+        logger.info(
+            f"Order submitted: {result.get('id')} status={result.get('status')}"
+        )
         return result
 
     def get_order(self, order_id: str) -> Dict[str, Any]:
@@ -222,7 +226,9 @@ class AlpacaTradingClient:
 
     # ==================== MARKET DATA (snapshots) ====================
 
-    def get_latest_quote(self, symbol: str, asset_type: str = "stock") -> Dict[str, Any]:
+    def get_latest_quote(
+        self, symbol: str, asset_type: str = "stock"
+    ) -> Dict[str, Any]:
         """
         Get latest quote/trade for a symbol.
         Uses Alpaca data API.

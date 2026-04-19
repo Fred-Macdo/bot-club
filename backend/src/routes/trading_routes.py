@@ -1,12 +1,11 @@
-import httpx
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query  # , status
 from pydantic import BaseModel
 from typing import Literal, Optional
 
 from ..dependencies import get_current_user_from_token, get_db
 from ..models.user import User
-from ..models.strategy import Strategy, AccountTypeEnum, StatusEnum
+from ..models.strategy import AccountTypeEnum  # , Strategy, StatusEnum
 from ..models.trading_session import TradingSessionStatus
 from ..utils.asset_classifier import classify_asset_type, is_within_market_hours
 import logging
@@ -19,9 +18,15 @@ logger = logging.getLogger(__name__)
 
 # Timeframe string → expected iteration interval in seconds
 _TIMEFRAME_SECONDS = {
-    "1M": 60, "5M": 300, "15M": 900, "30M": 1800,
-    "1H": 3600, "4H": 14400, "1D": 86400,
+    "1M": 60,
+    "5M": 300,
+    "15M": 900,
+    "30M": 1800,
+    "1H": 3600,
+    "4H": 14400,
+    "1D": 86400,
 }
+
 
 def _compute_session_health(session: dict) -> str:
     """Return 'active', 'stale', or 'unknown' based on last_iteration_at vs timeframe."""
@@ -30,7 +35,9 @@ def _compute_session_health(session: dict) -> str:
         # No iterations yet — check if session is very new (< 5 min since start)
         started = session.get("started_at")
         if started:
-            started_dt = datetime.fromisoformat(started) if isinstance(started, str) else started
+            started_dt = (
+                datetime.fromisoformat(started) if isinstance(started, str) else started
+            )
             if (datetime.now(tz=timezone.utc) - started_dt).total_seconds() < 300:
                 return "starting"
         return "unknown"
@@ -48,15 +55,17 @@ def _compute_session_health(session: dict) -> str:
         return "stale"
     return "active"
 
+
 router = APIRouter()
 
 
 class TradingRequest(BaseModel):
     strategy_id: str
     mode: Literal[AccountTypeEnum.LIVE, AccountTypeEnum.PAPER]
-    data_provider: Literal['yahoo', 'alpaca', 'polygon']
+    data_provider: Literal["yahoo", "alpaca", "polygon"]
     initial_capital: float = 1000.0
     extended_hours: bool = False
+
 
 @router.post("/run")
 async def start_trading(
@@ -89,8 +98,8 @@ async def start_trading(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    request_dict = trading_request.model_dump(mode='json')
-    user_dict = current_user.model_dump(mode='json')
+    request_dict = trading_request.model_dump(mode="json")
+    user_dict = current_user.model_dump(mode="json")
 
     if asset_type == "crypto":
         # ---- Crypto: launch continuous task immediately ----
@@ -144,6 +153,7 @@ class StopTradingRequest(BaseModel):
     strategy_id: str
     task_id: Optional[str] = None  # May be None for scheduled stock strategies
 
+
 @router.post("/stop")
 async def stop_trading(
     trading_request: StopTradingRequest,
@@ -159,10 +169,12 @@ async def stop_trading(
     user_id = str(current_user.id)
 
     # Look up the session to find schedule_name (for stock strategies)
-    session_doc = db.trading_sessions.find_one({
-        "strategy_id": trading_request.strategy_id,
-        "user_id": user_id,
-    })
+    session_doc = db.trading_sessions.find_one(
+        {
+            "strategy_id": trading_request.strategy_id,
+            "user_id": user_id,
+        }
+    )
     schedule_name = None
     if session_doc:
         schedule_name = (session_doc.get("config") or {}).get("schedule_name")
@@ -171,6 +183,7 @@ async def stop_trading(
     if schedule_name:
         try:
             from redbeat import RedBeatSchedulerEntry
+
             entry = RedBeatSchedulerEntry.from_key(schedule_name, app=celery_app)
             entry.delete()
             logger.info(f"Deleted RedBeat schedule: {schedule_name}")
@@ -185,17 +198,20 @@ async def stop_trading(
     if not trading_request.task_id and session_doc:
         db.trading_sessions.update_one(
             {"strategy_id": trading_request.strategy_id, "user_id": user_id},
-            {"$set": {
-                "status": TradingSessionStatus.STOPPED,
-                "stopped_at": datetime.now(tz=timezone.utc),
-                "updated_at": datetime.now(tz=timezone.utc),
-            }},
+            {
+                "$set": {
+                    "status": TradingSessionStatus.STOPPED,
+                    "stopped_at": datetime.now(tz=timezone.utc),
+                    "updated_at": datetime.now(tz=timezone.utc),
+                }
+            },
         )
 
     return {"status": "stop_requested", "task_id": trading_request.task_id}
 
 
 # ==================== SESSION ENDPOINTS ====================
+
 
 @router.get("/active")
 async def get_active_sessions(
@@ -213,14 +229,22 @@ async def get_active_sessions(
             TradingSessionStatus.PENDING,
             TradingSessionStatus.SCHEDULED,
         ]
-        sessions = list(db.trading_sessions.find(
-            {"user_id": user_id, "status": {"$in": active_statuses}},
-            {"_id": 0},  # Exclude MongoDB _id
-        ))
+        sessions = list(
+            db.trading_sessions.find(
+                {"user_id": user_id, "status": {"$in": active_statuses}},
+                {"_id": 0},  # Exclude MongoDB _id
+            )
+        )
 
         # Convert datetime objects for JSON serialization
         for session in sessions:
-            for key in ("created_at", "started_at", "stopped_at", "last_iteration_at", "updated_at"):
+            for key in (
+                "created_at",
+                "started_at",
+                "stopped_at",
+                "last_iteration_at",
+                "updated_at",
+            ):
                 if session.get(key) and hasattr(session[key], "isoformat"):
                     session[key] = session[key].isoformat()
 
@@ -264,10 +288,18 @@ async def get_session_details(
         )
 
         if not session:
-            raise HTTPException(status_code=404, detail="No session found for this strategy")
+            raise HTTPException(
+                status_code=404, detail="No session found for this strategy"
+            )
 
         # Convert datetime objects
-        for key in ("created_at", "started_at", "stopped_at", "last_iteration_at", "updated_at"):
+        for key in (
+            "created_at",
+            "started_at",
+            "stopped_at",
+            "last_iteration_at",
+            "updated_at",
+        ):
             if session.get(key) and hasattr(session[key], "isoformat"):
                 session[key] = session[key].isoformat()
 

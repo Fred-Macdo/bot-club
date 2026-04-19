@@ -82,8 +82,9 @@ def seconds_until_market_open(extended: bool = False) -> float:
             return 0.0
 
     # Find next weekday at open_time
-    target = now_et.replace(hour=open_time.hour, minute=open_time.minute,
-                            second=0, microsecond=0)
+    target = now_et.replace(
+        hour=open_time.hour, minute=open_time.minute, second=0, microsecond=0
+    )
     if target <= now_et:
         target += timedelta(days=1)
     # Skip weekends

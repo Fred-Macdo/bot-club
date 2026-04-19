@@ -6,8 +6,10 @@ Usage:
   DRY_RUN=1 python test_close_doge.py        # just check position, don't sell
   python test_close_doge.py                    # actually close the DOGE position
 """
+
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from src.services.trading.alpaca_client import AlpacaTradingClient
@@ -23,6 +25,7 @@ secret_key = os.getenv("ALPACA_SECRET_KEY")
 
 if not api_key or not secret_key:
     from pymongo import MongoClient
+
     db = MongoClient(MONGO_URL)[MONGO_DB_NAME]
     # Find the first user with Alpaca config
     user = db.users.find_one({"alpaca_config": {"$exists": True}})
@@ -32,7 +35,9 @@ if not api_key or not secret_key:
         secret_key = cfg.get("secret_key")
         print(f"Loaded keys for user: {user.get('email', user['_id'])}")
     else:
-        print("ERROR: No Alpaca keys found. Set ALPACA_API_KEY / ALPACA_SECRET_KEY env vars.")
+        print(
+            "ERROR: No Alpaca keys found. Set ALPACA_API_KEY / ALPACA_SECRET_KEY env vars."
+        )
         sys.exit(1)
 
 # ---------- init client ----------
@@ -69,10 +74,14 @@ else:
         print("\n=== Closing DOGE position ===")
         try:
             result = client.close_position("DOGE/USD")
-            print(f"  Order submitted: id={result.get('id')} status={result.get('status')}")
+            print(
+                f"  Order submitted: id={result.get('id')} status={result.get('status')}"
+            )
             # Wait for fill
             filled = client.wait_for_order_fill(result["id"], timeout=15)
-            print(f"  Fill status: {filled.get('status')}  avg_price={filled.get('filled_avg_price')}")
+            print(
+                f"  Fill status: {filled.get('status')}  avg_price={filled.get('filled_avg_price')}"
+            )
         except Exception as e:
             print(f"  ERROR: {e}")
     else:

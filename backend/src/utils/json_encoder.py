@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 from bson import ObjectId
 
+
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Decimal):
