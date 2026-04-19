@@ -18,7 +18,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/bot-club
+  IMAGE_PREFIX: fred-macdo/bot-club
 
 jobs:
   # ── Build & push release images ──────────────────────────
