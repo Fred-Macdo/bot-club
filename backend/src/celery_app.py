@@ -1,8 +1,8 @@
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="pydantic")
 
-from celery import Celery
-from .config import REDIS_URL
+from celery import Celery  # noqa: E402
+from .config import REDIS_URL  # noqa: E402
 
 celery_app = Celery(
     "bot_club_tasks",

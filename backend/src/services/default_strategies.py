@@ -1,6 +1,4 @@
     # backend/services/default_strategies.py
-import asyncio
-import logging
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -8,7 +6,6 @@ import json
 from pymongo.database import Database
 from typing import Dict, Any, List
 
-from ..models.strategy import Strategy
 from ..utils.db_executor import run_db_operation
 
 # Default strategies configuration

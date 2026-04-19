@@ -3,12 +3,10 @@ from abc import ABC, abstractmethod
 import polars as pl
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Optional, Dict, Any, Tuple, Union, List
+from typing import Dict, Any, Tuple, Union, List
 import yfinance as yf
 import aiohttp
-from urllib.parse import urlencode
 import asyncio
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +309,8 @@ class AlpacaProvider(BaseDataProvider):
                 bars = data.get("bars", {})
                 
                 for symbol, symbol_bars in bars.items():
-                    if not symbol_bars: continue
+                    if not symbol_bars:
+                        continue
                     
                     df = pl.DataFrame(symbol_bars)
                     clean_sym = symbol.replace("/USD", "")

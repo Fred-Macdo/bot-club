@@ -5,7 +5,6 @@ import sys
 import argparse
 from pathlib import Path
 from pymongo import AsyncMongoClient
-from bson import ObjectId
 from datetime import datetime, timezone
 
 # Import the strategy models - adjust path for Docker environment

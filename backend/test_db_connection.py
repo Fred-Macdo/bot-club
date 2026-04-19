@@ -1,10 +1,8 @@
 
 import os
-import sys
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from pathlib import Path
-from bson import ObjectId
 
 # Setup paths (adjust these based on where you run the script from)
 # If running from app/ root:

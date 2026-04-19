@@ -2,10 +2,9 @@ import asyncio
 import logging
 import polars as pl
 from datetime import datetime, timedelta, date
-from typing import List, Dict, Any, Optional
-from pymongo import AsyncMongoClient
+from typing import List, Dict, Optional
 
-from .data_providers import DataProviderFactory, BaseDataProvider, AVAILABLE_CRYPTO_ASSETS, TIMEFRAME_MAPPINGS
+from .data_providers import DataProviderFactory, BaseDataProvider, AVAILABLE_CRYPTO_ASSETS
 
 logger = logging.getLogger(__name__)
 

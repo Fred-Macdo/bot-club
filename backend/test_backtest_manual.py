@@ -1,9 +1,7 @@
 import os
 import sys
 import logging
-from datetime import date
 from pymongo import MongoClient
-from bson import ObjectId
 
 # Add current directory to path so we can import src
 sys.path.append(os.getcwd())
@@ -19,7 +17,6 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
 try:
     from src.tasks.backtest_task import run_backtest_task
-    from src.models.backtest import BacktestParams
 except ImportError as e:
     logger.error(f"Import failed: {e}")
     logger.info("Make sure you run this script from the 'app/backend' directory.")
@@ -93,7 +90,6 @@ def test_task():
         # But wait, run_backtest_task uses 'bind=True', so the first argument IS 'self'.
         # We can construct a mock self if needed, or rely on .apply()
         
-        from celery import Task
         class MockTask:
             request = type('obj', (object,), {'id': 'test-task-id'})
             

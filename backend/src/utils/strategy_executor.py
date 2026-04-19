@@ -1,6 +1,6 @@
 import logging
 import polars as pl
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from decimal import Decimal
 from bson import ObjectId
 

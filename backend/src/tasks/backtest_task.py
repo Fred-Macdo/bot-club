@@ -1,13 +1,10 @@
-from celery import Celery
 from datetime import datetime, timezone
 from typing import Dict, Any
-from bson import ObjectId
 import asyncio
 import logging
 
 # Use absolute imports instead of relative imports
-from ..config import *
-from ..models.backtest import BacktestStatus
+from ..config import *  # noqa: F403
 from ..services.data_retrieval.data_manager import DataManager
 from ..utils.strategy_executor import StrategyExecutor
 from ..database.client import get_db
@@ -16,7 +13,7 @@ from ..utils.db_executor import run_db_operation
 logger = logging.getLogger(__name__)
 
 # Import the celery app from the main celery module
-from src.celery_app import celery_app
+from src.celery_app import celery_app  # noqa: E402
 
 
 # ==================== ASYNC HELPERS ====================
@@ -231,7 +228,7 @@ def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"Strategy Config: {payload['strategy_config']}")
 
         # Run the full async pipeline (fetch → execute → save) in one event loop
-        portfolio = asyncio.run(_run_backtest_pipeline(payload))
+        asyncio.run(_run_backtest_pipeline(payload))
 
         logger.info(f"Backtest completed and saved: {backtest_id}")
 

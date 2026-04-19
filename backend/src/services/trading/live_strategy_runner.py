@@ -188,7 +188,7 @@ class LiveStrategyRunner:
                 phantom_symbols = portfolio_symbols - alpaca_symbols
                 for sym in phantom_symbols:
                     lots = portfolio.lots.get(sym, [])
-                    avg_entry = float(sum(l.entry_price for l in lots) / len(lots)) if lots else 0.0
+                    avg_entry = float(sum(lot.entry_price for lot in lots) / len(lots)) if lots else 0.0
                     try:
                         quote = self.alpaca.get_latest_quote(
                             sym,
@@ -438,7 +438,7 @@ class LiveStrategyRunner:
 
         # Enforce DCA interval
         if can_enter and is_dca_entry and self.dca_interval_seconds > 0:
-            latest_lot = max(current_lots, key=lambda l: l.entry_time)
+            latest_lot = max(current_lots, key=lambda lot: lot.entry_time)
             lot_entry = latest_lot.entry_time if latest_lot.entry_time.tzinfo else latest_lot.entry_time.replace(tzinfo=timezone.utc)
             elapsed = (datetime.now(tz=timezone.utc) - lot_entry).total_seconds()
             if elapsed < self.dca_interval_seconds:

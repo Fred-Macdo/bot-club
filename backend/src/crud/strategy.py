@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Union, Any
+from typing import List, Optional, Union
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 

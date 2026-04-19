@@ -9,9 +9,6 @@ For the synchronous Celery context we provide sync wrappers.
 
 import logging
 import time
-import json
-from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Dict, Any, Optional, List, Literal
 import requests
 
@@ -254,7 +251,7 @@ class AlpacaTradingClient:
         prices = {}
         if asset_type == "crypto":
             normalized = [f"{s}/USD" for s in symbols]
-            url = f"https://data.alpaca.markets/v1beta3/crypto/us/latest/trades"
+            url = "https://data.alpaca.markets/v1beta3/crypto/us/latest/trades"
             params = {"symbols": ",".join(normalized)}
             resp = requests.get(url, headers=self.headers, params=params)
             resp.raise_for_status()

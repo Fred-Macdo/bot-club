@@ -6,15 +6,9 @@ from ..utils.db_executor import run_db_operation
 
 from ..models.backtest import (
     Backtest,
-    BacktestCreate,
-    BacktestParams,
-    BacktestResponse,
     BacktestSummary,
-    TradeData,
-    EquityPoint,
-    BacktestStats,
-    BacktestExecution
-    )
+    BacktestExecution,
+)
 from ..utils.mongo_helpers import PyObjectId
 
 # Collection Names
@@ -101,7 +95,6 @@ async def get_backtests_by_user_id(
     print(f"DEBUG CRUD: Getting backtests for user_id: {user_id}")
     
     backtest_collection = db[BACKTEST_COLLECTION]
-    strategy_collection = db[STRATEGY_COLLECTION]
     
     # Ensure proper ObjectId type
     if isinstance(user_id, str):
@@ -159,7 +152,6 @@ async def get_backtests_by_strategy_id(
     print(f"DEBUG CRUD: Getting backtests for strategy_id: {strategy_id}")
     
     backtest_collection = db[BACKTEST_COLLECTION]
-    strategy_collection = db[STRATEGY_COLLECTION]
     
     # Ensure proper ObjectId types
     if isinstance(strategy_id, str):

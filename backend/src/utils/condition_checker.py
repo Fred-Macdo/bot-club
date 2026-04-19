@@ -1,5 +1,4 @@
 import logging
-import operator
 from typing import Dict, Any, List, Union, Tuple, Optional
 
 logger = logging.getLogger(__name__)

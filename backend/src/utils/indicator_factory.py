@@ -89,7 +89,7 @@ class IndicatorFactory:
         Args:
             period: Period for RSI
         """
-        return pl.col("close").ta.rsi(period).alias(f'rsi')
+        return pl.col("close").ta.rsi(period).alias('rsi')
     
     def calculate_macd(self, fast_period=12, slow_period=26, signal_period=9):
         """
@@ -139,7 +139,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).alias(f'atr')
+        ).alias('atr')
     
     def calculate_adx(self, period):
         """
@@ -153,7 +153,7 @@ class IndicatorFactory:
             pl.col("low"),
             pl.col("close"),
             timeperiod=period
-        ).alias(f'adx')
+        ).alias('adx')
     
     def calculate_obv(self):
         """
