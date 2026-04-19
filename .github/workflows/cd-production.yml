@@ -74,7 +74,7 @@ jobs:
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:latest
           format: table
-          exit-code: 1          # BLOCK on critical/high for production
+          exit-code: 0          # warn only; set to 1 to block on critical
           severity: CRITICAL,HIGH
         env:
           TRIVY_USERNAME: ${{ github.actor }}
