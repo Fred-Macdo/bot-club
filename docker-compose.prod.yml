@@ -28,6 +28,7 @@ services:
 
   celery_worker:
     volumes: []
+    stop_grace_period: 120s
     environment:
       - MONGO_URL=mongodb://${MONGO_USERNAME:-botclub}:${MONGO_PASSWORD}@mongo:27017/bot_club_db?authSource=admin
       - MONGO_DB=bot_club_db

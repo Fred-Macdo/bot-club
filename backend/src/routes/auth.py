@@ -1,21 +1,54 @@
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from pymongo.database import Database
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import httpx
+import os
+from bson import ObjectId
 
-from ..dependencies import get_db
+from pydantic import BaseModel, Field
+
+from ..dependencies import get_db, get_current_user_from_token
 from ..models.user import UserCreate, UserInDB, UserProfile, Token
 from ..crud.user import create_user, get_user_by_email, get_user_by_username, create_user_from_google
 from ..crud.strategy import get_strategies_by_user_id
-from ..utils.security import verify_password, create_access_token
+from ..utils.security import verify_password, create_access_token, get_password_hash
+from ..utils.db_executor import run_db_operation
 from ..config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
 
 router = APIRouter()
+
+_COOKIE_NAME = "access_token"
+_COOKIE_MAX_AGE = 1800  # 30 minutes
+_IS_PRODUCTION = os.getenv("NODE_ENV") == "production"
+
+
+def _set_auth_cookie(response: Response, token: str):
+    """Set httpOnly cookie with the JWT token."""
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=_IS_PRODUCTION,
+        samesite="lax",
+        max_age=_COOKIE_MAX_AGE,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response):
+    """Clear the auth cookie."""
+    response.delete_cookie(
+        key=_COOKIE_NAME,
+        httponly=True,
+        secure=_IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
 
 @router.post("/register", response_model=UserProfile)
 async def register_user(
@@ -83,11 +116,13 @@ async def login_for_access_token(
         # Create access token
         access_token = create_access_token(data={"sub": str(user.id)})
         
-        return {
+        response = JSONResponse(content={
             "access_token": access_token,
             "token_type": "bearer",
-            "expires_in": 1800  # 30 minutes in seconds
-        }
+            "expires_in": _COOKIE_MAX_AGE,
+        })
+        _set_auth_cookie(response, access_token)
+        return response
         
     except HTTPException:
         raise
@@ -207,12 +242,14 @@ async def google_callback(
         # Generate JWT token for our app
         access_token = create_access_token(data={"sub": str(user.id)})
         
-        return {
+        response = JSONResponse(content={
             "access_token": access_token,
             "token_type": "bearer",
-            "expires_in": 1800,  # 30 minutes
-            "user": UserProfile(**user.model_dump())
-        }
+            "expires_in": _COOKIE_MAX_AGE,
+            "user": UserProfile(**user.model_dump()).model_dump(mode='json'),
+        })
+        _set_auth_cookie(response, access_token)
+        return response
         
     except HTTPException:
         raise
@@ -222,3 +259,37 @@ async def google_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Authentication failed: {str(e)}"
         )
+
+
+@router.post("/logout")
+async def logout():
+    """Clear the auth cookie."""
+    response = JSONResponse(content={"message": "Logged out"})
+    _clear_auth_cookie(response)
+    return response
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
+@router.put("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user: UserInDB = Depends(get_current_user_from_token),
+    db: Database = Depends(get_db),
+):
+    """Change the current user's password."""
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect current password",
+        )
+    hashed = get_password_hash(body.new_password)
+    await run_db_operation(
+        db.user.update_one,
+        {"_id": ObjectId(current_user.id)},
+        {"$set": {"hashed_password": hashed}},
+    )
+    return {"message": "Password updated"}

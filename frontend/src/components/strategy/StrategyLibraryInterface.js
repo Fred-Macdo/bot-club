@@ -627,8 +627,17 @@ const StrategyLibraryInterface = () => {
                 '& .MuiTab-root': {
                   textTransform: 'none',
                   minHeight: 36,
-                  fontSize: '0.875rem'
-                }
+                  fontSize: '0.875rem',
+                  color: theme.palette.text.secondary,
+                },
+                '& .Mui-selected': {
+                  color: `${theme.palette.secondary.main} !important`,
+                },
+              }}
+              TabIndicatorProps={{
+                style: {
+                  backgroundColor: theme.palette.secondary.main,
+                },
               }}
             >
               <Tab label={`All (${allStrategies.length})`} />

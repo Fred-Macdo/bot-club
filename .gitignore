@@ -1,4 +1,5 @@
 secrets/
+certs/
 # Ignore all .env files everywhere
 **/.env
 *.env
@@ -6,3 +7,11 @@ secrets/
 __pycache__/
 node_modules/
 dist/
+
+# CI/CD artifacts
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+coverage/
+*.coverage
+build/

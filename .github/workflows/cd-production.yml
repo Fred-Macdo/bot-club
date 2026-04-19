@@ -1,0 +1,159 @@
+# ──────────────────────────────────────────────────────────────
+# CD Production – deploy on version tags (vX.Y.Z)
+# Requires manual approval via GitHub Environment protection
+# ──────────────────────────────────────────────────────────────
+name: CD – Production
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false     # never cancel a prod deploy mid-flight
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/bot-club
+
+jobs:
+  # ── Build & push release images ──────────────────────────
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Scan release images ──────────────────────────────────
+  scan:
+    needs: build-push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:latest
+          format: table
+          exit-code: 1          # BLOCK on critical/high for production
+          severity: CRITICAL,HIGH
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Deploy to production (manual approval gate) ──────────
+  deploy:
+    needs: [build-push, scan]
+    runs-on: ubuntu-latest
+    environment: production     # ← requires reviewer approval in GitHub settings
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Option A: SSH deploy to a VM ──────────────────────
+      # Uncomment and configure when your production server is ready.
+      #
+      # - name: Deploy via SSH
+      #   uses: appleboy/ssh-action@v1
+      #   with:
+      #     host: ${{ secrets.PROD_HOST }}
+      #     username: ${{ secrets.PROD_USER }}
+      #     key: ${{ secrets.PROD_SSH_KEY }}
+      #     script: |
+      #       cd /opt/bot-club
+      #       export IMAGE_TAG=${{ github.ref_name }}
+      #       docker compose -f docker-compose.prod.yml pull
+      #       docker compose -f docker-compose.prod.yml up -d --remove-orphans
+      #       docker image prune -f
+
+      # ── Placeholder until infra is provisioned ────────────
+      - name: Deploy (placeholder)
+        run: |
+          echo "========================================="
+          echo "  Production deploy – ${{ github.ref_name }}"
+          echo "========================================="
+          echo ""
+          echo "Images:"
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:${{ github.ref_name }}"
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:${{ github.ref_name }}"
+          echo ""
+          echo "To activate:"
+          echo "  1. Add PROD_HOST, PROD_USER, PROD_SSH_KEY secrets"
+          echo "  2. Create docker-compose.prod.yml with production overrides"
+          echo "  3. Uncomment the SSH deploy step above"
+
+  # ── Post-deploy smoke test ───────────────────────────────
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    # Only run when actual deploy is wired up
+    if: false
+    steps:
+      - name: Health check – backend
+        run: |
+          for i in $(seq 1 10); do
+            STATUS=$(curl -sf "${{ secrets.PROD_URL }}/health" | jq -r .status) && break || sleep 5
+          done
+          if [ "$STATUS" != "healthy" ]; then
+            echo "::error::Backend health check failed"
+            exit 1
+          fi
+
+      - name: Health check – frontend
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${{ secrets.PROD_URL }}:3000")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Frontend returned HTTP $STATUS"
+            exit 1
+          fi
+
+  # ── Rollback (manual dispatch) ───────────────────────────
+  rollback:
+    runs-on: ubuntu-latest
+    if: false  # Enable via workflow_dispatch when needed
+    environment: production
+    steps:
+      - name: Rollback instructions
+        run: |
+          echo "To rollback:"
+          echo "  git tag -d ${{ github.ref_name }}"
+          echo "  git push origin :refs/tags/${{ github.ref_name }}"
+          echo "  Then re-tag the previous good commit and push"

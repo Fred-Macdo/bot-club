@@ -27,6 +27,33 @@ from .services.default_strategies import initialize_default_strategies
 mongo_client: MongoClient | None = None
 database: Database | None = None
 
+
+def _ensure_indexes(db: Database):
+    """Create MongoDB indexes for frequently queried collections."""
+    from pymongo import ASCENDING
+    db.user.create_index("email", unique=True, background=True)
+    db.user.create_index("userName", unique=True, background=True)
+    db.strategy.create_index("user_id", background=True)
+    db.trading_sessions.create_index(
+        [("strategy_id", ASCENDING), ("user_id", ASCENDING), ("config.mode", ASCENDING)],
+        background=True,
+    )
+    db.trading_sessions.create_index("task_id", background=True)
+    db.trading_sessions.create_index(
+        [("user_id", ASCENDING), ("config.mode", ASCENDING)],
+        background=True,
+    )
+    db.backtests.create_index("user_id", background=True)
+    db.backtests.create_index("backtest_id", unique=True, background=True)
+    db.backtest_executions.create_index("backtest_id", background=True)
+    db.strategy_portfolios.create_index(
+        [("strategy_id", ASCENDING), ("user_id", ASCENDING), ("mode", ASCENDING)],
+        background=True,
+    )
+    db.user_config.create_index("user_id", unique=True, background=True)
+    print("MongoDB indexes ensured")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -39,7 +66,14 @@ async def lifespan(app: FastAPI):
     print("Starting up application...")
     
     # Initialize MongoDB connection
-    mongo_client = MongoClient(os.getenv("MONGO_URL", "mongodb://mongo:27017/"))
+    mongo_client = MongoClient(
+        os.getenv("MONGO_URL", "mongodb://mongo:27017/"),
+        maxPoolSize=50,
+        minPoolSize=5,
+        maxIdleTimeMS=45000,
+        waitQueueTimeoutMS=30000,
+        serverSelectionTimeoutMS=5000,
+    )
     database = mongo_client[os.getenv("MONGO_DB_NAME", "bot_club_db")]
     
     # Store database in app state for dependency injection
@@ -49,6 +83,12 @@ async def lifespan(app: FastAPI):
     db_client.database = database
     db_client.client = mongo_client
     db_client._connected = True
+    
+    # Ensure MongoDB indexes exist
+    try:
+        _ensure_indexes(database)
+    except Exception as e:
+        print(f"Warning: Could not create indexes: {e}")
     
     # Initialize Redis connection
     try:
@@ -91,7 +131,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 # --- CORS Middleware Configuration ---
-origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
 
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 allowed_headers = ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"]

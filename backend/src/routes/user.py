@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
+from pydantic import BaseModel
 from pymongo.database import Database
 from ..dependencies import get_db, get_current_user_from_token
 from ..models.user import UserInDB, UserUpdate, UserProfile
 from ..crud.user import update_user, get_user_by_mongodb_id
+from ..utils.security import verify_password
+from ..utils.db_executor import run_db_operation
+from .auth import _clear_auth_cookie
 from bson import ObjectId
 
 router = APIRouter()
@@ -52,3 +56,56 @@ async def get_user_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid user ID"
         )
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+@router.delete("/me")
+async def delete_account(
+    body: DeleteAccountRequest,
+    current_user: UserInDB = Depends(get_current_user_from_token),
+    db: Database = Depends(get_db),
+):
+    """Permanently delete the current user's account and all associated data."""
+    if not verify_password(body.password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect password",
+        )
+
+    user_id = str(current_user.id)
+
+    # Gather backtest IDs so we can clean up backtest_executions
+    backtest_docs = await run_db_operation(
+        db.backtests.find, {"user_id": user_id}
+    )
+    backtest_ids = [doc["backtest_id"] for doc in backtest_docs if "backtest_id" in doc]
+
+    if backtest_ids:
+        await run_db_operation(
+            db.backtest_executions.delete_many, {"backtest_id": {"$in": backtest_ids}}
+        )
+
+    # Delete all user-owned data
+    for collection_name, query in [
+        ("backtests", {"user_id": user_id}),
+        ("trading_sessions", {"user_id": user_id}),
+        ("strategy_portfolios", {"user_id": user_id}),
+        ("strategy", {"user_id": user_id}),
+        ("user_config", {"user_id": user_id}),
+    ]:
+        await run_db_operation(
+            getattr(db, collection_name).delete_many, query
+        )
+
+    # Delete the user document itself
+    await run_db_operation(db.user.delete_one, {"_id": ObjectId(user_id)})
+
+    # Clear auth cookie
+    response = Response(status_code=200)
+    response.body = b'{"message":"Account deleted"}'
+    response.media_type = "application/json"
+    _clear_auth_cookie(response)
+    return response

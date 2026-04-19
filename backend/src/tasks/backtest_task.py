@@ -196,7 +196,14 @@ async def _run_backtest_pipeline(payload: Dict[str, Any]):
 
 # ==================== CELERY TASK ====================
 
-@celery_app.task(bind=True, name="src.tasks.backtest_task.run_backtest_task")
+@celery_app.task(
+    bind=True,
+    name="src.tasks.backtest_task.run_backtest_task",
+    soft_time_limit=900,
+    time_limit=960,
+    autoretry_for=(ConnectionError, OSError),
+    retry_kwargs={"max_retries": 2, "countdown": 30},
+)
 def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Celery task to execute a backtest.

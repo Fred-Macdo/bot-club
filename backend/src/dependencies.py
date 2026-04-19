@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=env_path)
 # load_dotenv()
 
 from pymongo import MongoClient
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pymongo.database import Database
 from bson import ObjectId
@@ -37,8 +37,22 @@ if not SECRET_KEY or SECRET_KEY == "your-secret-key-change-this-in-production":
     raise ValueError("JWT_SECRET_KEY must be set in .env file")
 ALGORITHM = "HS256"
 
-# Security
-security = HTTPBearer()
+# Security — Bearer header is optional so we can fall back to cookie
+security = HTTPBearer(auto_error=False)
+
+
+def _extract_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str:
+    """Extract JWT from Bearer header or httpOnly cookie."""
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    token = request.cookies.get("access_token")
+    if token:
+        return token
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 def get_mongo_url():
     """Get MongoDB connection URL based on environment"""
@@ -96,19 +110,22 @@ async def get_db() -> AsyncGenerator[Database, None]:
 
 
 async def get_current_user_from_token(
+    request: Request,
     token: HTTPAuthorizationCredentials = Depends(security), 
     db: Database = Depends(get_db)
 ) -> UserInDB:
-    """Get current user from JWT token"""
+    """Get current user from JWT token (Bearer header or httpOnly cookie)"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     
+    raw_token = _extract_token(request, token)
+    
     try:
         # Decode JWT token
-        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(raw_token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception

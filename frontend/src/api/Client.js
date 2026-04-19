@@ -15,6 +15,7 @@ class ApiClient {
     this.backendServicesURL = process.env.REACT_APP_BACKEND_SERVICES_URL || '';
     
     this.tokenKey = 'authToken'; // Consistent token key across the application
+    this._token = null; // In-memory token (cookie is the primary auth source)
     
     console.log('ApiClient initialized:', {
       environment: process.env.NODE_ENV,
@@ -27,22 +28,26 @@ class ApiClient {
   }
 
   // Token management methods
+  // The httpOnly cookie is the primary auth mechanism.
+  // The in-memory token is kept for client-side checks (e.g. isAuthenticated).
   getToken() {
-    return localStorage.getItem(this.tokenKey);
+    return this._token;
   }
 
   setToken(token) {
     if (token) {
-      localStorage.setItem(this.tokenKey, token);
-      console.log('Token stored successfully');
+      this._token = token;
+      console.log('Token stored in memory');
     } else {
       console.warn('Attempted to set null/undefined token');
     }
   }
 
   removeToken() {
+    this._token = null;
+    // Also clear legacy localStorage token if present
     localStorage.removeItem(this.tokenKey);
-    console.log('Token removed from storage');
+    console.log('Token removed');
   }
 
   // Check if user is authenticated
@@ -81,6 +86,7 @@ class ApiClient {
     const config = {
       ...options,
       headers,
+      credentials: 'include', // Send httpOnly cookie with every request
     };
 
     try {
@@ -210,13 +216,33 @@ export const authApi = {
 
   logout() {
     apiClient.removeToken();
+    // Clear the httpOnly cookie on the server
+    fetch(`${apiClient.baseURL}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {}); // Best-effort; don't block logout
     // Dispatch logout event for components to listen to
     window.dispatchEvent(new CustomEvent('auth:logout', { detail: 'User logged out' }));
   },
 
   isAuthenticated() {
     return apiClient.isAuthenticated();
-  }
+  },
+
+  async changePassword(currentPassword, newPassword) {
+    return apiClient.put('/api/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+  },
+
+  async deleteAccount(password) {
+    return apiClient.request('/api/users/me', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+  },
 };
 
 // 👤 USER API

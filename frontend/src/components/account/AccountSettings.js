@@ -11,6 +11,7 @@ import {
 //import { useAuth } from '../auth/AuthContext';
 import ApiConfigForm from './ApiConfigForm';
 import ProfileSettings from './ProfileSettingsForm';
+import SecuritySettingsForm from './SecuritySettingsForm';
 
 const AccountSettings = () => {
   const theme = useTheme();
@@ -33,7 +34,7 @@ const AccountSettings = () => {
             bgcolor: theme.palette.primary.main,
             borderRadius: '8px 8px 0 0',
             '& .MuiTab-root': { color: theme.palette.secondary.main },
-            '& .Mui-selected': { color: 'rgba(255, 255, 255, 0.7)' }
+            '& .Mui-selected': { color: '#ffffff !important' }
                   
           }}
           TabIndicatorProps={{
@@ -72,13 +73,7 @@ const AccountSettings = () => {
           
           {activeTab === 2 && (
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Security Settings
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Update your password and security preferences.
-              </Typography>
-              {/* Security settings form would go here */}
+              <SecuritySettingsForm />
             </Box>
           )}
           

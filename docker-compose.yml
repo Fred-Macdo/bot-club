@@ -32,6 +32,7 @@ services:
     # Concurrency 2 to allow control tasks (stop) while a strategy is running
     # We manage Alpaca connection limits via Redis lock in the task itself
     command: celery -A src.celery_app worker --loglevel=info --concurrency=2 -Q live_trading,paper_trading,backtesting,control
+    stop_grace_period: 120s
     volumes:
       - ./backend:/app
     env_file:

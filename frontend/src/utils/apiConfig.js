@@ -29,8 +29,10 @@ const getWebSocketUrl = () => {
     return backendServicesUrl.replace(/^http/, 'ws');
   }
   
-  // Default to localhost:8000 for development - backend main port, not backend_services
-  return 'ws://localhost:8000';
+  // Default to relative path for production (nginx proxies ws connections)
+  // In development, use REACT_APP_API_URL or empty string
+  const apiUrl = process.env.REACT_APP_API_URL || '';
+  return apiUrl.replace(/^http/, 'ws') || `ws://${window.location.host}`;
 };
 
 const createApiConfig = () => {
@@ -46,9 +48,10 @@ const createApiConfig = () => {
 };
 
 // Get authorization headers with token
+// Note: The httpOnly cookie is the primary auth mechanism.
+// This header is a fallback for non-fetch clients (e.g. axios).
 const getAuthHeaders = () => {
-  const token = localStorage.getItem('authToken');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {};
 };
 
 // Create axios instance with proper configuration

@@ -87,23 +87,26 @@ async def initialize_database():
         logger.info("Initializing default strategies collection...")
         await initialize_default_strategies_collection()
         
-        # Create a test user if none exist
+        # Create a test user if none exist (skip in production)
         user_count = await db.user.count_documents({})
         if user_count == 0:
-            logger.info("Creating test user...")
-            test_user = {
-                "_id": PyObjectId(),
-                "email": "test@example.com",
-                "username": "testuser",
-                "hashed_password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewgmNDqh.EKTjg6m",  # password: "testpass"
-                "is_active": True,
-                "created_at": datetime.now(tz=timezone.utc)
-            }
-            await db.user.insert_one(test_user)
-            logger.info(f"Created test user with ID: {test_user['_id']}")
-            
-            # Create default strategies for test user from the default collection
-            await create_user_strategies_from_defaults(db, test_user["_id"])
+            if os.getenv("NODE_ENV") == "production":
+                logger.warning("Skipping test user creation in production environment")
+            else:
+                logger.info("Creating test user...")
+                test_user = {
+                    "_id": PyObjectId(),
+                    "email": "test@example.com",
+                    "username": "testuser",
+                    "hashed_password": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewgmNDqh.EKTjg6m",  # password: "testpass"
+                    "is_active": True,
+                    "created_at": datetime.now(tz=timezone.utc)
+                }
+                await db.user.insert_one(test_user)
+                logger.info(f"Created test user with ID: {test_user['_id']}")
+                
+                # Create default strategies for test user from the default collection
+                await create_user_strategies_from_defaults(db, test_user["_id"])
         
         # Verify collections were created
         collections_after = await db.list_collection_names()

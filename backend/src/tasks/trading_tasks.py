@@ -30,7 +30,7 @@ def publish_to_stream(redis_client, stream_key, event_type, data):
     redis_client.xadd(stream_key, payload, maxlen=1000) # Use maxlen to prevent infinite growth
 
 
-@celery_app.task(bind=True, time_limit=86400)
+@celery_app.task(bind=True, soft_time_limit=82800, time_limit=86400)
 def run_live_strategy(self, trading_request, current_user):
     """
     Runs a live trading strategy as a Celery task.

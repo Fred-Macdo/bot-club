@@ -36,3 +36,8 @@ celery_app.conf.beat_schedule = {
 }
 
 celery_app.conf.timezone = 'US/Eastern'
+
+# Production hardening
+celery_app.conf.result_expires = 3600  # Auto-cleanup task results after 1 hour
+celery_app.conf.task_acks_late = True  # Acknowledge tasks after execution (safer on worker crash)
+celery_app.conf.worker_prefetch_multiplier = 1  # Prevent greedy prefetch for long-running tasks

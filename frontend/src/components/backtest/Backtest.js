@@ -170,9 +170,9 @@ const Backtest = () => {
       const response = await fetch(`${getApiBaseUrl()}/api/backtest/deploy/${selectedStrategy}?deploy_type=${deployType}`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'application/json'
-        }
+        },
+        credentials: 'include'
       });
       
       if (!response.ok) {

@@ -28,7 +28,14 @@ class DatabaseClient:
                 # Check if we're running in Docker (use service name) or local development
                 mongo_url = os.getenv('MONGO_URL', 'mongodb://localhost:27017/bot_club_db')
                 print(f"Connecting to local MongoDB: {mongo_url}")
-                self.client = MongoClient(mongo_url)
+                self.client = MongoClient(
+                    mongo_url,
+                    maxPoolSize=50,
+                    minPoolSize=5,
+                    maxIdleTimeMS=45000,
+                    waitQueueTimeoutMS=30000,
+                    serverSelectionTimeoutMS=5000,
+                )
             else:
                 # Use MongoDB Atlas
                 connection_string = os.getenv('MONGO_CONNECTION_STRING')
@@ -40,7 +47,14 @@ class DatabaseClient:
                     connection_string = f"mongodb+srv://{username}:{password}@{cluster}/"
                 
                 print(f"Connecting to MongoDB Atlas")
-                self.client = MongoClient(connection_string)
+                self.client = MongoClient(
+                    connection_string,
+                    maxPoolSize=50,
+                    minPoolSize=5,
+                    maxIdleTimeMS=45000,
+                    waitQueueTimeoutMS=30000,
+                    serverSelectionTimeoutMS=5000,
+                )
             
             # Get database name
             db_name = os.getenv('MONGO_DB_NAME', 'bot_club_db')

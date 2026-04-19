@@ -1,0 +1,157 @@
+# ──────────────────────────────────────────────────────────────
+# CD Staging – build, push, and deploy to staging
+# Triggers automatically on push to main (after CI passes)
+# ──────────────────────────────────────────────────────────────
+name: CD – Staging
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write  # push to GHCR
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/bot-club
+
+jobs:
+  # ── Gate: only proceed if CI succeeded ───────────────────
+  gate:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - run: echo "CI passed – proceeding to staging deploy"
+
+  # ── Build & Push Docker images ───────────────────────────
+  build-push:
+    needs: gate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=staging
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Scan images for vulnerabilities ──────────────────────
+  scan:
+    needs: build-push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:staging
+          format: table
+          exit-code: 0          # warn only; set to 1 to block on critical
+          severity: CRITICAL,HIGH
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Deploy to staging ────────────────────────────────────
+  deploy:
+    needs: [build-push, scan]
+    runs-on: ubuntu-latest
+    environment: staging        # requires GitHub Environment setup
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Option A: SSH deploy to a VM ──────────────────────
+      # Uncomment and configure when your staging server is ready.
+      #
+      # - name: Deploy via SSH
+      #   uses: appleboy/ssh-action@v1
+      #   with:
+      #     host: ${{ secrets.STAGING_HOST }}
+      #     username: ${{ secrets.STAGING_USER }}
+      #     key: ${{ secrets.STAGING_SSH_KEY }}
+      #     script: |
+      #       cd /opt/bot-club
+      #       docker compose pull
+      #       docker compose up -d --remove-orphans
+      #       docker image prune -f
+
+      # ── Placeholder until infra is provisioned ────────────
+      - name: Deploy (placeholder)
+        run: |
+          echo "========================================="
+          echo "  Staging deploy step placeholder"
+          echo "========================================="
+          echo ""
+          echo "Images built and pushed:"
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:staging"
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:staging"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Provision a staging VM or container service"
+          echo "  2. Add STAGING_HOST, STAGING_USER, STAGING_SSH_KEY secrets"
+          echo "  3. Uncomment the SSH deploy step above"
+
+  # ── Post-deploy smoke test ───────────────────────────────
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    # Only run when actual deploy is wired up
+    if: false
+    steps:
+      - name: Health check – backend
+        run: |
+          for i in $(seq 1 10); do
+            STATUS=$(curl -sf "${{ secrets.STAGING_URL }}/health" | jq -r .status) && break || sleep 5
+          done
+          if [ "$STATUS" != "healthy" ]; then
+            echo "::error::Backend health check failed (status=$STATUS)"
+            exit 1
+          fi
+          echo "Backend healthy"
+
+      - name: Health check – frontend
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "${{ secrets.STAGING_URL }}:3000")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Frontend returned HTTP $STATUS"
+            exit 1
+          fi
+          echo "Frontend reachable"

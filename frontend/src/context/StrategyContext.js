@@ -28,20 +28,13 @@ export const StrategyProvider = ({ children }) => {
       setStrategies([]);
       return;
     }
-    const token = apiClient.getToken(); // Get token using apiClient
-    if (!token) {
-      console.log('No token found, skipping strategy fetch');
-      setError('User not authenticated'); // Set an error if token is missing
-      setStrategies([]);
-      return;
-    }
     try {
       setLoading(true);
       setError(null);
       
       const response = await fetch('/api/strategy/user_strategies', {
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`, // Use token from apiClient
           'Content-Type': 'application/json'
         }
       });
@@ -102,18 +95,13 @@ export const StrategyProvider = ({ children }) => {
     if (!user) {
       throw new Error('User must be authenticated to save strategies');
     }
-    const token = apiClient.getToken(); // Get token using apiClient
-    if (!token) {
-      throw new Error('User not authenticated, token missing.');
-    }
-
     try {
       setLoading(true);
       setError(null);
       const response = await fetch('/api/strategy', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`, // Use token from apiClient
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(strategyData)
@@ -144,18 +132,13 @@ export const StrategyProvider = ({ children }) => {
     if (!user) {
       throw new Error('User must be authenticated to update strategies');
     }
-    const token = apiClient.getToken(); // Get token using apiClient
-    if (!token) {
-      throw new Error('User not authenticated, token missing.');
-    }
-
     try {
       setLoading(true);
       setError(null);
       const response = await fetch(`/api/strategy/${strategyId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`, // Use token from apiClient
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(strategyData)
@@ -186,18 +169,13 @@ export const StrategyProvider = ({ children }) => {
     if (!user) {
       throw new Error('User must be authenticated to delete strategies');
     }
-    const token = apiClient.getToken(); // Get token using apiClient
-    if (!token) {
-      throw new Error('User not authenticated, token missing.');
-    }
-
     try {
       setLoading(true);
       setError(null);
       const response = await fetch(`/api/strategy/${strategyId}`, {
         method: 'DELETE',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`, // Use token from apiClient
           'Content-Type': 'application/json'
         }
       });

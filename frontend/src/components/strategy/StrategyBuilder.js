@@ -45,7 +45,7 @@ const StrategyCenterPage = () => {
               color: theme.palette.secondary.main
             },
             '& .Mui-selected': { 
-              color: 'rgba(255, 255, 255, 0.7)' 
+              color: '#ffffff !important'
             }
           }}
           TabIndicatorProps={{

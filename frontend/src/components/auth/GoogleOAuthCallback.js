@@ -10,7 +10,7 @@ import {
   Paper,
   useTheme 
 } from '@mui/material';
-import { authApi } from '../../api/Client';
+import apiClient, { authApi } from '../../api/Client';
 
 const GoogleOAuthCallback = () => {
   const [searchParams] = useSearchParams();
@@ -55,9 +55,10 @@ const GoogleOAuthCallback = () => {
         setStatus('Exchanging code for token...');
 
         // Exchange code for token with backend
-        const backendUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+        const backendUrl = process.env.REACT_APP_API_URL || '';
         const response = await fetch(`${backendUrl}/api/auth/google/callback?code=${code}`, {
           method: 'GET',
+          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
           },
@@ -70,9 +71,9 @@ const GoogleOAuthCallback = () => {
 
         const data = await response.json();
         
-        // Store the access token
+        // Store the access token in memory (httpOnly cookie is set by the backend)
         if (data.access_token) {
-          localStorage.setItem('authToken', data.access_token);
+          apiClient.setToken(data.access_token);
           
           setStatus('Fetching user profile...');
           
